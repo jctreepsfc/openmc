@@ -104,6 +104,8 @@ extern bool weight_window_checkpoint_collision; //!< enable weight window check
                                                 //!< upon collision?
 extern bool write_all_tracks;     //!< write track files for every particle?
 extern bool write_initial_source; //!< write out initial source file?
+extern bool onnx_on;              //!< run with neural boundary condition?
+extern bool onnx_train_mode;      //!< training mode (vs inference mode)?
 
 // Paths to various files
 extern std::string path_cross_sections; //!< path to cross_sections.xml
@@ -114,6 +116,7 @@ extern std::string path_sourcepoint;      //!< path to a source file
 extern std::string path_statepoint;       //!< path to a statepoint file
 extern std::string weight_windows_file;   //!< Location of weight window file to
                                           //!< load on simulation initialization
+extern std::string path_onnx_model;       //!< path to trained onnx model file
 
 // This is required because the c_str() may not be the first thing in
 // std::string. Sometimes it is, but it seems libc++ may not be like that

@@ -6,8 +6,13 @@
 
 #include "openmc/constants.h"
 #include "openmc/error.h"
+#include "openmc/neural_boundary.h"
 #include "openmc/random_ray/random_ray.h"
 #include "openmc/surface.h"
+
+#ifdef OPENMC_ONNX_ENABLED
+#include <onnxruntime_cxx_api.h>
+#endif
 
 namespace openmc {
 
@@ -246,6 +251,30 @@ void RotationalPeriodicBC::handle_particle(
 
   // Pass the new location, direction, and surface to the particle.
   p.cross_periodic_bc(surf, new_r, new_u, new_surface);
+}
+
+//==============================================================================
+// NeuralBC implementation
+//==============================================================================
+
+NeuralBC::NeuralBC()
+{
+  // Need to also check that we crossed an active part of the surface
+  // with the BC: can check if new cell == last cell
+  // -> Actually shouldn't be an issue with DAG geometry
+  if (settings::onnx_train_mode) {
+    return;
+  }
+}
+
+void NeuralBC::handle_particle(Particle& p, const Surface& surf) const
+{
+  if (settings::onnx_train_mode) {
+    write_neural_BC_data(p, surf);
+    return;
+  }
+  // Since this kind of looks like a vacuum BC, maybe need to have a
+  // cross_neural_bc here
 }
 
 } // namespace openmc

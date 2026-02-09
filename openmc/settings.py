@@ -161,6 +161,12 @@ class Settings:
         lost particles.
 
         .. versionadded:: 0.14.0
+    neural_boundary_condition : dict
+        Dictionary containing settings for a neural boundary condition.
+        Acceptable keys are:
+
+        :enable: Whether the feature should be enabled (bool)
+        :train: Whether to run in training or inference mode (bool)
     no_reduce : bool
         Indicate that all user-defined and global tallies should not be reduced
         across processes in a parallel calculation.
@@ -464,6 +470,8 @@ class Settings:
         self._use_decay_photons = None
 
         self._random_ray = {}
+
+        self._neural_boundary_condition = None
 
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -770,6 +778,18 @@ class Settings:
             else:
                 cv.check_type("output['path']", value, str)
         self._output = output
+
+    @property
+    def neural_boundary_condition(self) -> dict:
+        return self._neural_boundary_condition
+        
+    @neural_boundary_condition.setter
+    def neural_boundary_condition(self, neural_boundary_condition: dict):
+        cv.check_type('neural_boundary_condition', neural_boundary_condition, Mapping)
+        for key, value in neural_boundary_condition.items():
+            cv.check_value('neural_boundary_condition key', key, ('enable', 'train'))
+            cv.check_type(f"neural_boundary_condition['{key}']", value, bool)
+        self._neural_boundary_condition = neural_boundary_condition
 
     @property
     def sourcepoint(self) -> dict:
@@ -1480,6 +1500,13 @@ class Settings:
                 else:
                     subelement.text = value
 
+    def _create_neural_boundary_condition_subelement(self, root):
+        if self._neural_boundary_condition is not None:
+            element = ET.SubElement(root, "neural_boundary_condition")
+            for key, value in sorted(self._neural_boundary_condition.items()):
+                subelement = ET.SubElement(element, key)
+                subelement.text = str(value).lower()
+
     def _create_verbosity_subelement(self, root):
         if self._verbosity is not None:
             element = ET.SubElement(root, "verbosity")
@@ -2006,9 +2033,18 @@ class Settings:
             for key in ('summary', 'tallies', 'path'):
                 value = get_text(elem, key)
                 if value is not None:
-                    if key in ('summary', 'tallies'):
-                        value = value in ('true', '1')
+                    value = value in ('true', '1')
                     self.output[key] = value
+
+    def _neural_boundary_condition_from_xml_element(self, root):
+        elem = root.find('neural_boundary_condition')
+        if elem is not None:
+            self.neural_boundary_condition = {}
+            for key in ('enable', 'train'):
+                value = get_text(elem, key)
+                if value is not None:
+                    value = value in ('true', 'i')
+                self.output[key] = value
 
     def _statepoint_from_xml_element(self, root):
         elem = root.find('state_point')
@@ -2416,6 +2452,7 @@ class Settings:
         self._create_keff_trigger_subelement(element)
         self._create_source_subelement(element, mesh_memo)
         self._create_output_subelement(element)
+        self._create_neural_boundary_condition_subelement(element)
         self._create_statepoint_subelement(element)
         self._create_sourcepoint_subelement(element)
         self._create_surf_source_read_subelement(element)
@@ -2530,6 +2567,7 @@ class Settings:
         settings._source_from_xml_element(elem, meshes)
         settings._volume_calcs_from_xml_element(elem)
         settings._output_from_xml_element(elem)
+        settings._neural_boundary_condition_from_xml_element(elem)
         settings._statepoint_from_xml_element(elem)
         settings._sourcepoint_from_xml_element(elem)
         settings._surf_source_read_from_xml_element(elem)

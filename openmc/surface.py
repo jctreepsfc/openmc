@@ -16,7 +16,7 @@ from .bounding_box import BoundingBox
 from ._xml import get_elem_list, get_text
 
 
-_BOUNDARY_TYPES = {'transmission', 'vacuum', 'reflective', 'periodic', 'white'}
+_BOUNDARY_TYPES = {'transmission', 'vacuum', 'reflective', 'periodic', 'white', 'surrogate'}
 _ALBEDO_BOUNDARIES = {'reflective', 'periodic', 'white'}
 
 _WARNING_UPPER = """\
@@ -2219,7 +2219,7 @@ class Quadric(QuadricMixin, Surface):
     ----------
     a, b, c, d, e, f, g, h, j, k : float, optional
         coefficients for the surface. All default to 0.
-    boundary_type : {'transmission', 'vacuum', 'reflective', 'white'}, optional
+    boundary_type : {'transmission', 'vacuum', 'reflective', 'white', 'surrogate'}, optional
         Boundary condition that defines the behavior for particles hitting the
         surface. Defaults to transmissive boundary condition where particles
         freely pass through the surface.
@@ -2237,7 +2237,7 @@ class Quadric(QuadricMixin, Surface):
     ----------
     a, b, c, d, e, f, g, h, j, k : float
         coefficients for the surface
-    boundary_type : {'transmission', 'vacuum', 'reflective', 'white'}
+    boundary_type : {'transmission', 'vacuum', 'reflective', 'white', 'surrogate'}
         Boundary condition that defines the behavior for particles hitting the
         surface.
     albedo : float
@@ -2389,7 +2389,7 @@ class XTorus(TorusMixin, Surface):
         Minor radius of the torus in [cm] (parallel to axis of revolution)
     c : float
         Minor radius of the torus in [cm] (perpendicular to axis of revolution)
-    boundary_type : {'transmission', 'vacuum', 'reflective', 'white'}
+    boundary_type : {'transmission', 'vacuum', 'reflective', 'white', 'surrogate'}
         Boundary condition that defines the behavior for particles hitting the
         surface.
     albedo : float
@@ -2464,7 +2464,7 @@ class YTorus(TorusMixin, Surface):
         Minor radius of the torus in [cm] (parallel to axis of revolution)
     c : float
         Minor radius of the torus (perpendicular to axis of revolution)
-    boundary_type : {'transmission', 'vacuum', 'reflective', 'white'}
+    boundary_type : {'transmission', 'vacuum', 'reflective', 'white', 'surrogate'}
         Boundary condition that defines the behavior for particles hitting the
         surface.
     albedo : float
@@ -2539,7 +2539,7 @@ class ZTorus(TorusMixin, Surface):
         Minor radius of the torus in [cm] (parallel to axis of revolution)
     c : float
         Minor radius of the torus in [cm] (perpendicular to axis of revolution)
-    boundary_type : {'transmission', 'vacuum', 'reflective', 'white'}
+    boundary_type : {'transmission', 'vacuum', 'reflective', 'white', 'surrogate'}
         Boundary condition that defines the behavior for particles hitting the
         surface.
     albedo : float

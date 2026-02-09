@@ -35,6 +35,7 @@ option(OPENMC_ENABLE_PROFILE  "Compile with profiling flags"                    
 option(OPENMC_ENABLE_COVERAGE "Compile with coverage analysis flags"                 OFF)
 option(OPENMC_USE_DAGMC       "Enable support for DAGMC (CAD) geometry"              OFF)
 option(OPENMC_USE_LIBMESH     "Enable support for libMesh unstructured mesh tallies" OFF)
+option(OPENMC_USE_ONNX        "Enable support onnx runtime boundary conditions"      OFF)
 option(OPENMC_USE_MPI         "Enable MPI"                                           OFF)
 option(OPENMC_USE_UWUW        "Enable UWUW"                                          OFF)
 option(OPENMC_FORCE_VENDORED_LIBS "Explicitly use submodules defined in 'vendor'"    OFF)
@@ -142,6 +143,16 @@ endif()
 
 if(OPENMC_USE_LIBMESH)
   find_package(LIBMESH REQUIRED)
+endif()
+
+#===============================================================================
+# ONNX Runtime
+#===============================================================================
+
+if(OPENMC_USE_ONNX)
+  find_package(onnxruntime REQUIRED)
+  message(STATUS "Found ONNXRuntime: ${ONNXRUNTIME_DIR} (version\
+    ${ONNXRUNTIME_VERSION})")
 endif()
 
 #===============================================================================
@@ -367,6 +378,7 @@ list(APPEND libopenmc_SOURCES
   src/mgxs_interface.cpp
   src/ncrystal_interface.cpp
   src/ncrystal_load.cpp
+  src/neural_boundary.cpp
   src/nuclide.cpp
   src/output.cpp
   src/particle.cpp
@@ -519,6 +531,11 @@ endif()
 if(OPENMC_USE_LIBMESH)
   target_compile_definitions(libopenmc PRIVATE OPENMC_LIBMESH_ENABLED)
   target_link_libraries(libopenmc PkgConfig::LIBMESH)
+endif()
+
+if(OPENMC_USE_ONNX)
+  target_compile_definitions(libopenmc PRIVATE OPENMC_ONNX_ENABLED)
+  target_link_libraries(libopenmc onnxruntime::onnxruntime)
 endif()
 
 if (PNG_FOUND)

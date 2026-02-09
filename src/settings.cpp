@@ -87,6 +87,8 @@ bool weight_window_checkpoint_surface {false};
 bool weight_window_checkpoint_collision {true};
 bool write_all_tracks {false};
 bool write_initial_source {false};
+bool onnx_on {false};
+bool onnx_train_mode {false};
 
 std::string path_cross_sections;
 std::string path_input;
@@ -96,6 +98,7 @@ std::string path_sourcepoint;
 std::string path_statepoint;
 const char* path_statepoint_c {path_statepoint.c_str()};
 std::string weight_windows_file;
+std::string path_onnx_model;
 
 int32_t n_inactive {0};
 int32_t max_lost_particles {10};
@@ -664,6 +667,21 @@ void read_settings_xml(pugi::xml_node root)
   // Check if we want to write out source
   if (check_for_node(root, "write_initial_source")) {
     write_initial_source = get_node_value_bool(root, "write_initial_source");
+  }
+
+  // Check if we are training an onnx model
+  if (check_for_node(root, "neural_boundary_condition")) {
+    pugi::xml_node node_neural_BC = root.child("neural_boundary_condition");
+
+    // Check if enabled
+    if (check_for_node(node_neural_BC, "enable")) {
+      onnx_on = get_node_value_bool(node_neural_BC, "enable");
+    }
+
+    // Check for training mode
+    if (check_for_node(node_neural_BC, "train")) {
+      onnx_train_mode = get_node_value_bool(node_neural_BC, "train");
+    }
   }
 
   // Get relative number of lost particles

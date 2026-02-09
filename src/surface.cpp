@@ -89,6 +89,8 @@ Surface::Surface(pugi::xml_node surf_node)
       bc_ = make_unique<WhiteBC>();
     } else if (surf_bc == "periodic") {
       // Periodic BCs are handled separately
+    } else if (surf_bc == "surrogate") {
+      bc_ = make_unique<NeuralBC>();
     } else {
       fatal_error(fmt::format("Unknown boundary condition \"{}\" specified "
                               "on surface {}",

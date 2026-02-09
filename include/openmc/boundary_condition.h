@@ -162,5 +162,18 @@ protected:
   int axis_2_idx_;
 };
 
+//==============================================================================
+//! A BC that uses a neural network to move particles through the problem
+//==============================================================================
+
+class NeuralBC : public BoundaryCondition {
+public:
+  NeuralBC();
+
+  void handle_particle(Particle& p, const Surface& surf) const override;
+
+  std::string type() const override { return "surrogate"; }
+};
+
 } // namespace openmc
 #endif // OPENMC_BOUNDARY_CONDITION_H

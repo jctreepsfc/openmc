@@ -11,6 +11,7 @@
 #include "openmc/ifp.h"
 #include "openmc/material.h"
 #include "openmc/message_passing.h"
+#include "openmc/neural_boundary.h"
 #include "openmc/nuclide.h"
 #include "openmc/output.h"
 #include "openmc/particle.h"
@@ -95,6 +96,12 @@ int openmc_simulation_init()
   if (!settings::track_identifiers.empty() || settings::write_all_tracks) {
     open_track_file();
   }
+
+#ifdef OPENMC_ONNX_ENABLED
+  if (settings::onnx_on && settings::onnx_train_mode) {
+    initialize_neural_BC();
+  }
+#endif
 
   // If doing an event-based simulation, intialize the particle buffer
   // and event queues
@@ -187,6 +194,13 @@ int openmc_simulation_finalize()
   if (!settings::track_identifiers.empty() || settings::write_all_tracks) {
     close_track_file();
   }
+
+#ifdef OPENMC_ONNX_ENABLED
+  // Close neural BC hdf file
+  if (settings::onnx_train_mode && settings::onnx_on) {
+    finalize_neural_BC();
+  }
+#endif
 
   // Increment total number of generations
   simulation::total_gen += simulation::current_batch * settings::gen_per_batch;
@@ -397,6 +411,12 @@ void initialize_batch()
 
   // Add user tallies to active tallies list
   setup_active_tallies();
+
+#ifdef OPENMC_ONNX_ENABLED
+  if (settings::onnx_on && settings::onnx_train_mode) {
+    initialize_neural_BC_batch();
+  }
+#endif
 }
 
 void finalize_batch()
@@ -501,6 +521,12 @@ void finalize_batch()
   if (settings::collision_track) {
     collision_track_flush_bank();
   }
+
+#ifdef OPENMC_ONNX_ENABLED
+  if (settings::onnx_on && settings::onnx_train_mode) {
+    finalize_neural_BC_batch();
+  }
+#endif
 }
 
 void initialize_generation()
