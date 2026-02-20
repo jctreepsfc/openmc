@@ -1,10 +1,12 @@
 #include "openmc/neural_boundary.h"
+#include "openmc/dagmc.h"
 #include "openmc/hdf5_interface.h"
 #include "openmc/position.h"
 #include "openmc/simulation.h"
 #include "openmc/surface.h"
 
 #include <array>
+#include <cmath> // For log
 #include <fmt/core.h>
 #include <hdf5.h>
 #include <omp.h>
@@ -41,9 +43,11 @@ void initialize_neural_BC()
   H5Tinsert(
     cross_dtype, "particle", HOFFSET(NeuralBCData, particle), H5T_NATIVE_INT);
   H5Tinsert(cross_dtype, "surface_id", HOFFSET(NeuralBCData, surface_id),
-    H5T_NATIVE_INT);
+    H5T_NATIVE_ULONG);
   H5Tinsert(cross_dtype, "particle_id", HOFFSET(NeuralBCData, particle_id),
     H5T_NATIVE_INT);
+  H5Tinsert(cross_dtype, "centroid", HOFFSET(NeuralBCData, centroid), postype);
+  H5Tinsert(cross_dtype, "normal", HOFFSET(NeuralBCData, normal), postype);
   H5Tinsert(cross_dtype, "r", HOFFSET(NeuralBCData, r), postype);
   H5Tinsert(cross_dtype, "u", HOFFSET(NeuralBCData, u), postype);
   H5Tinsert(cross_dtype, "E", HOFFSET(NeuralBCData, E), H5T_NATIVE_DOUBLE);
@@ -68,17 +72,35 @@ void write_neural_BC_data(Particle& p, const Surface& surf)
   std::vector<NeuralBCData>& bank_access =
     neural_boundary_crossings[omp_get_thread_num()];
   // Get last facet crossing
-  // TODO: Will this be the current boundary crossing
-  unsigned long facet;
+  moab::EntityHandle facet;
   MB_CHK_ERR_CONT(p.history().get_last_intersection(facet));
+
+  // Get facet normal
+  Direction normal = surf.normal(p.r());
+
+  // Get facet centroid
+  // NOTE: Put this here since I don't think the surface should logically have a
+  // method for this
+  auto dag_ptr = dynamic_cast<const DAGSurface&>(surf).dagmc_ptr();
+  std::vector<moab::EntityHandle> vertices;
+  dag_ptr->moab_instance()->get_adjacencies(&facet, 1, 0, false, vertices);
+  std::vector<double> coords(9);
+  dag_ptr->moab_instance()->get_coords(
+    &vertices[0], vertices.size(), coords.data());
+  Position centroid {(coords[0] + coords[3] + coords[6]) / 3.0,
+    (coords[1] + coords[4] + coords[7]) / 3.0,
+    (coords[2] + coords[5] + coords[8]) / 3.0};
+
   // Create the data
   NeuralBCData crossing;
   crossing.particle = p.type();
-  crossing.surface_id = facet; // surf.id_;
+  crossing.surface_id = static_cast<unsigned long>(facet); // surf.id_;
   crossing.particle_id = p.id();
+  crossing.centroid = centroid;
+  crossing.normal = normal;
   crossing.r = p.r();
-  crossing.u = p.u();
-  crossing.E = p.E();
+  crossing.u = p.u() * p.u(); // Want square in neural net
+  crossing.E = log(p.E());
   crossing.time = p.time();
   crossing.wgt = p.wgt();
   bank_access.push_back(crossing);

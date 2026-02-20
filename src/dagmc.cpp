@@ -315,6 +315,8 @@ void DAGUniverse::init_geometry()
       s->bc_ = make_unique<ReflectiveBC>();
     } else if (bc_value == "periodic") {
       fatal_error("Periodic boundary condition not supported in DAGMC.");
+    } else if (bc_value == "surrogate") {
+      s->bc_ = make_unique<NeuralBC>();
     } else {
       fatal_error(fmt::format("Unknown boundary condition \"{}\" specified "
                               "on surface {}",

@@ -257,20 +257,21 @@ void RotationalPeriodicBC::handle_particle(
 // NeuralBC implementation
 //==============================================================================
 
-NeuralBC::NeuralBC()
-{
-  // Need to also check that we crossed an active part of the surface
-  // with the BC: can check if new cell == last cell
-  // -> Actually shouldn't be an issue with DAG geometry
-  if (settings::onnx_train_mode) {
-    return;
-  }
-}
+// NeuralBC::NeuralBC()
+// {
+//   // Need to also check that we crossed an active part of the surface
+//   // with the BC: can check if new cell == last cell
+//   // -> Actually shouldn't be an issue with DAG geometry
+//   if (settings::onnx_train_mode) {
+//     return;
+//   }
+// }
 
 void NeuralBC::handle_particle(Particle& p, const Surface& surf) const
 {
   if (settings::onnx_train_mode) {
     write_neural_BC_data(p, surf);
+    p.cross_surrogate_bc(surf);
     return;
   }
   // Since this kind of looks like a vacuum BC, maybe need to have a

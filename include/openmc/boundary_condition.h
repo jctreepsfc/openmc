@@ -168,8 +168,6 @@ protected:
 
 class NeuralBC : public BoundaryCondition {
 public:
-  NeuralBC();
-
   void handle_particle(Particle& p, const Surface& surf) const override;
 
   std::string type() const override { return "surrogate"; }

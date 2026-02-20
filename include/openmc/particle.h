@@ -103,6 +103,12 @@ public:
   void cross_periodic_bc(
     const Surface& surf, Position new_r, Direction new_u, int new_surface);
 
+  //! Cross a surrogate boundary condition.
+  //
+  //! \param surf The surface (with the surrogate boundary condition) that the
+  //!   particle struck.
+  void cross_surrogate_bc(const Surface& surf);
+
   //! mark a particle as lost and create a particle restart file
   //! \param message A warning message to display
   virtual void mark_as_lost(const char* message) override;
