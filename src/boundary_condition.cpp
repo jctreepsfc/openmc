@@ -269,11 +269,17 @@ void RotationalPeriodicBC::handle_particle(
 
 void NeuralBC::handle_particle(Particle& p, const Surface& surf) const
 {
+  if (!settings::onnx_on) {
+    p.cross_surrogate_bc(surf);
+    return;
+  }
   if (settings::onnx_train_mode) {
     write_neural_BC_data(p, surf);
     p.cross_surrogate_bc(surf);
     return;
   }
+  infer_crossing_neural_BC(p, surf);
+  // p.cross_surrogate_bc(surf);
   // Since this kind of looks like a vacuum BC, maybe need to have a
   // cross_neural_bc here
 }

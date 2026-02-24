@@ -98,8 +98,12 @@ int openmc_simulation_init()
   }
 
 #ifdef OPENMC_ONNX_ENABLED
-  if (settings::onnx_on && settings::onnx_train_mode) {
-    initialize_neural_BC();
+  if (settings::onnx_on) {
+    if (settings::onnx_train_mode) {
+      initialize_train_neural_BC();
+    } else {
+      initialize_infer_neural_BC();
+    }
   }
 #endif
 
@@ -198,7 +202,7 @@ int openmc_simulation_finalize()
 #ifdef OPENMC_ONNX_ENABLED
   // Close neural BC hdf file
   if (settings::onnx_train_mode && settings::onnx_on) {
-    finalize_neural_BC();
+    finalize_train_neural_BC();
   }
 #endif
 
@@ -414,7 +418,7 @@ void initialize_batch()
 
 #ifdef OPENMC_ONNX_ENABLED
   if (settings::onnx_on && settings::onnx_train_mode) {
-    initialize_neural_BC_batch();
+    initialize_train_neural_BC_batch();
   }
 #endif
 }
@@ -524,7 +528,7 @@ void finalize_batch()
 
 #ifdef OPENMC_ONNX_ENABLED
   if (settings::onnx_on && settings::onnx_train_mode) {
-    finalize_neural_BC_batch();
+    finalize_train_neural_BC_batch();
   }
 #endif
 }

@@ -1,5 +1,6 @@
 #include "openmc/neural_boundary.h"
 #include "openmc/dagmc.h"
+#include "openmc/geometry.h"
 #include "openmc/hdf5_interface.h"
 #include "openmc/position.h"
 #include "openmc/simulation.h"
@@ -8,8 +9,12 @@
 #include <array>
 #include <cmath> // For log
 #include <fmt/core.h>
+#include <fstream>
 #include <hdf5.h>
 #include <omp.h>
+
+#ifdef OPENMC_ONNX_ENABLED
+#include <onnxruntime_cxx_api.h>
 
 namespace openmc {
 
@@ -17,8 +22,21 @@ hid_t boundary_file;
 hid_t cross_dtype;
 
 std::vector<std::vector<NeuralBCData>> neural_boundary_crossings;
+std::vector<ONNXInput> onnx_input_data;
+std::vector<std::vector<Ort::Value>> onnx_input_tensors;
 
-void initialize_neural_BC()
+OrtEnv* onnx_environment = nullptr;
+std::vector<std::unique_ptr<Ort::Session>> onnx_model;
+Ort::MemoryInfo onnx_memory_info =
+  Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+Ort::RunOptions onnx_runoptions {nullptr};
+const char* onnx_inames[] = {"s_out", "c_out", "return_target", "tile_target",
+  "angle_target", "energy_target"};
+const char* onnx_onames[] = {"returns", "s_in", "angle", "energy"};
+std::map<unsigned long, int64_t> onnx_map;
+std::map<int64_t, unsigned long> onnx_map_inv;
+
+void initialize_train_neural_BC()
 {
   // Get the number of threads and pre-allocate
   for (int i = 0; i < omp_get_max_threads(); ++i) {
@@ -58,9 +76,10 @@ void initialize_neural_BC()
   H5Tclose(postype);
 }
 
-void initialize_neural_BC_batch()
+void initialize_train_neural_BC_batch()
 {
-  // Not sure if this is necessary yet
+  // Empty per-thread memory before a new batch
+  // This is called outside of omp parallel
   for (int i = 0; i < omp_get_max_threads(); ++i) {
     neural_boundary_crossings[i].clear();
   }
@@ -99,14 +118,102 @@ void write_neural_BC_data(Particle& p, const Surface& surf)
   crossing.centroid = centroid;
   crossing.normal = normal;
   crossing.r = p.r();
-  crossing.u = p.u() * p.u(); // Want square in neural net
+  crossing.u = p.u();
   crossing.E = log(p.E());
   crossing.time = p.time();
   crossing.wgt = p.wgt();
   bank_access.push_back(crossing);
 }
 
-void finalize_neural_BC_batch()
+void infer_crossing_neural_BC(Particle& p, const Surface& surf)
+{
+  std::vector<Ort::Value>& model_input =
+    onnx_input_tensors[omp_get_thread_num()];
+  ONNXInput& model_data = onnx_input_data[omp_get_thread_num()];
+
+  // === CONSTRUCT TENSOR WITH FACET INFO ===
+
+  unsigned long facet;
+  MB_CHK_ERR_CONT(p.history().get_last_intersection(facet));
+  model_data.s_values = {static_cast<int64_t>(onnx_map[facet])};
+
+  // === CONSTRUCT TENSOR WITH CONTINUOUS PARTICLE DATA ===
+
+  auto r = p.r();
+  auto u = p.u();
+  auto E = log(p.E());
+  model_data.c_values = {static_cast<float>(r.x), static_cast<float>(r.y),
+    static_cast<float>(r.z), static_cast<float>(u.x), static_cast<float>(u.y),
+    static_cast<float>(u.z), static_cast<float>(E)};
+
+  // === CONSTRUCT GUMBEL-MAX NOISE TENSORS ===
+
+  for (int i = 0; i < 4; ++i) {
+    // Ex. for c_out: [-1, 7]
+    // Create tensor
+    for (int j = 0; j < model_data.n_sizes[i]; ++j) {
+      model_data.n_values[i][j] = prn(p.current_seed());
+    }
+  }
+
+  // === RUN THE MODEL ===
+
+  // NOTE: We do not create the tensors, since they have already been setup to
+  // point at the memory of model.values
+  auto out = onnx_model[omp_get_thread_num()]->Run(
+    onnx_runoptions, onnx_inames, model_input.data(), 6, onnx_onames, 4);
+
+  // === MOVE THE PARTICLE ===
+
+  float is_return = out[0].GetTensorMutableData<float>()[0];
+  if (is_return == 0.) {
+    p.wgt() = 0.0;
+    return;
+  }
+
+  // Convert back from index to facet id
+  int64_t facet_i = out[1].GetTensorMutableData<int64_t>()[0];
+  facet = onnx_map_inv[facet_i];
+  // Get the centroid of the facet
+  auto dag_ptr = dynamic_cast<const DAGSurface&>(surf).dagmc_ptr();
+  std::vector<moab::EntityHandle> vertex_handles;
+  dag_ptr->moab_instance()->get_adjacencies(
+    &facet, 1, 0, false, vertex_handles);
+  std::vector<double> coords(9);
+  dag_ptr->moab_instance()->get_coords(
+    &vertex_handles[0], vertex_handles.size(), coords.data());
+
+  p.r().x = (coords[0] + coords[3] + coords[6]) / 3.0;
+  p.r().y = (coords[1] + coords[4] + coords[7]) / 3.0;
+  p.r().z = (coords[2] + coords[5] + coords[8]) / 3.0;
+
+  float* angle_i = out[2].GetTensorMutableData<float>();
+  p.u().x = angle_i[0];
+  p.u().y = angle_i[1];
+  p.u().z = angle_i[2];
+  float energy = out[3].GetTensorMutableData<float>()[0];
+  p.E() = exp(energy);
+
+  // FIX: This is just a check to see if particles are going the right direction
+  // if (p.r().norm() < (p.r() + TINY_BIT * p.u()).norm())
+  //   write_message(6, "BAD direction {}, {}, {}", p.u().x, p.u().y, p.u().z);
+
+  p.history().reset();
+
+  // FIX: Not sure if this will work
+  p.r_last_current() = p.r() + TINY_BIT * p.u();
+  p.surface() = 0;
+  // Figure out what cell particle is in now
+  p.n_coord() = 1;
+  if (!exhaustive_find_cell(p)) {
+    p.mark_as_lost("Couldn't find particle after hitting surrogate "
+                   "boundary on surface " +
+                   std::to_string(surf.id_) + ".");
+    return;
+  }
+}
+
+void finalize_train_neural_BC_batch()
 {
   for (int thread = 0; thread < neural_boundary_crossings.size(); thread++) {
     std::string dset_name =
@@ -124,10 +231,105 @@ void finalize_neural_BC_batch()
   }
 }
 
-void finalize_neural_BC()
+void finalize_train_neural_BC()
 {
   H5Tclose(cross_dtype);
   file_close(boundary_file);
 }
+
+void initialize_infer_neural_BC()
+{
+  OrtThreadingOptions* tp_options = nullptr;
+  auto ret = Ort::GetApi().CreateThreadingOptions(&tp_options);
+  // Set threads to 1 for intra-op if you want 1 core per OpenMP thread
+  // Alternatively, set to 0 to let ORT decide based on system cores
+  ret = Ort::GetApi().SetGlobalIntraOpNumThreads(tp_options, 1);
+  ret = Ort::GetApi().SetGlobalInterOpNumThreads(tp_options, 1);
+  // CRITICAL: Disable spinning to stop idle threads from hogging 100% CPU
+  ret = Ort::GetApi().SetGlobalSpinControl(tp_options, 0);
+  // 2. Initialize the Environment with these Global Options
+  // The Env must live as long as all sessions exist (e.g., a global or class
+  // member)
+  ret = Ort::GetApi().CreateEnvWithGlobalThreadPools(
+    ORT_LOGGING_LEVEL_WARNING, "Model", tp_options, &onnx_environment);
+  Ort::Env env(onnx_environment);
+  // Clean up the helper (Env takes a copy)
+  Ort::GetApi().ReleaseThreadingOptions(tp_options);
+
+  std::string filename = fmt::format("{}model.onnx", settings::path_output);
+  onnx_model.resize(omp_get_max_threads());
+  for (int i = 0; i < omp_get_max_threads(); ++i) {
+    Ort::SessionOptions session_options;
+    session_options.SetIntraOpNumThreads(1);
+    session_options.DisablePerSessionThreads();
+    session_options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
+    onnx_model[i] =
+      std::make_unique<Ort::Session>(env, filename.c_str(), session_options);
+  }
+
+  std::map<unsigned long, int64_t> onnx_map;
+  std::fstream f(
+    "/home/jctrieloff/Code/pytrainmc/entity_map.txt", std::ios_base::in);
+  unsigned long entity;
+  int64_t id;
+  while (f >> entity) {
+    f >> id;
+    onnx_map[entity] = id;
+    onnx_map_inv[id] = entity;
+  }
+  f.close();
+
+  // Pre-allocate memory for model inputs
+  for (int i = 0; i < omp_get_max_threads(); ++i) {
+    ONNXInput input;
+    input.s_shape = {1};
+    input.s_values = std::vector<int64_t>(1);
+    input.s_size = 1;
+    input.c_shape = {1, 7};
+    input.c_values = std::vector<float>(7);
+    input.c_size = 7;
+    for (int j = 2; j < 6; ++j) {
+      int w = onnx_model[i]
+                ->GetInputTypeInfo(j)
+                .GetTensorTypeAndShapeInfo()
+                .GetShape()[1];
+      if (w == 0) {
+        input.n_shapes.push_back(std::vector<int64_t> {1});
+        input.n_sizes.push_back(1);
+        input.n_values.push_back(std::vector<float>(1));
+      } else {
+        input.n_shapes.push_back(std::vector<int64_t> {1, w});
+        input.n_sizes.push_back(w);
+        input.n_values.push_back(std::vector<float>(w));
+      }
+    }
+    onnx_input_data.push_back(input);
+  }
+
+  // Now we set up our tensors to point permanently at the data
+  // NOTE: This allows us to never actually create a tensor during the loop
+  onnx_input_tensors.resize(omp_get_max_threads());
+  for (int i = 0; i < omp_get_max_threads(); ++i) {
+    auto& data = onnx_input_data[i];
+    auto& thread_tensors = onnx_input_tensors[i];
+    thread_tensors.reserve(6); // Total number of inputs
+    // Bind s_values
+    thread_tensors.push_back(
+      Ort::Value::CreateTensor<int64_t>(onnx_memory_info, data.s_values.data(),
+        data.s_size, data.s_shape.data(), data.s_shape.size()));
+    // Bind c_values
+    thread_tensors.push_back(
+      Ort::Value::CreateTensor<float>(onnx_memory_info, data.c_values.data(),
+        data.c_size, data.c_shape.data(), data.c_shape.size()));
+    // Bind Noise data
+    for (size_t j = 0; j < data.n_values.size(); ++j) {
+      thread_tensors.push_back(Ort::Value::CreateTensor<float>(onnx_memory_info,
+        data.n_values[j].data(), data.n_sizes[j], data.n_shapes[j].data(),
+        data.n_shapes[j].size()));
+    }
+  }
+}
+
+#endif // OPENMC_ONNX_ENABLED
 
 } // namespace openmc
