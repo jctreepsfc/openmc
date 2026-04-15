@@ -31,6 +31,11 @@ struct RunData {
   size_t size;
 };
 
+struct MapType {
+  unsigned long entity;
+  int64_t nnid;
+};
+
 // Ensure cache alignment
 struct alignas(64) ONNXInput {
   // Outgoing facet

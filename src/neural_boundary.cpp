@@ -2,6 +2,7 @@
 #include "openmc/dagmc.h"
 #include "openmc/geometry.h"
 #include "openmc/hdf5_interface.h"
+#include "openmc/material.h"
 #include "openmc/position.h"
 #include "openmc/simulation.h"
 #include "openmc/surface.h"
@@ -9,7 +10,6 @@
 #include <array>
 #include <cmath> // For log
 #include <fmt/core.h>
-#include <fstream>
 #include <hdf5.h>
 #include <omp.h>
 
@@ -96,6 +96,8 @@ void write_neural_BC_data(Particle& p, const Surface& surf)
 
   // Get facet normal
   Direction normal = surf.normal(p.r());
+  if (p.u().dot(normal) < 0.)
+    normal *= -1.;
 
   // Get facet centroid
   // NOTE: Put this here since I don't think the surface should logically have a
@@ -135,7 +137,7 @@ void infer_crossing_neural_BC(Particle& p, const Surface& surf)
 
   unsigned long facet;
   MB_CHK_ERR_CONT(p.history().get_last_intersection(facet));
-  model_data.s_values = {static_cast<int64_t>(onnx_map[facet])};
+  model_data.s_values = {static_cast<int64_t>(onnx_map.at(facet))};
 
   // === CONSTRUCT TENSOR WITH CONTINUOUS PARTICLE DATA ===
 
@@ -166,14 +168,14 @@ void infer_crossing_neural_BC(Particle& p, const Surface& surf)
   // === MOVE THE PARTICLE ===
 
   float is_return = out[0].GetTensorMutableData<float>()[0];
-  if (is_return == 0.) {
+  if (is_return < 0.5) {
     p.wgt() = 0.0;
     return;
   }
 
   // Convert back from index to facet id
   int64_t facet_i = out[1].GetTensorMutableData<int64_t>()[0];
-  facet = onnx_map_inv[facet_i];
+  facet = onnx_map_inv.at(facet_i);
   // Get the centroid of the facet
   auto dag_ptr = dynamic_cast<const DAGSurface&>(surf).dagmc_ptr();
   std::vector<moab::EntityHandle> vertex_handles;
@@ -191,16 +193,11 @@ void infer_crossing_neural_BC(Particle& p, const Surface& surf)
   p.u().x = angle_i[0];
   p.u().y = angle_i[1];
   p.u().z = angle_i[2];
-  float energy = out[3].GetTensorMutableData<float>()[0];
-  p.E() = exp(energy);
 
-  // FIX: This is just a check to see if particles are going the right direction
-  // if (p.r().norm() < (p.r() + TINY_BIT * p.u()).norm())
-  //   write_message(6, "BAD direction {}, {}, {}", p.u().x, p.u().y, p.u().z);
+  p.E() = exp(out[3].GetTensorMutableData<float>()[0]);
 
   p.history().reset();
 
-  // FIX: Not sure if this will work
   p.r_last_current() = p.r() + TINY_BIT * p.u();
   p.surface() = 0;
   // Figure out what cell particle is in now
@@ -211,6 +208,10 @@ void infer_crossing_neural_BC(Particle& p, const Surface& surf)
                    std::to_string(surf.id_) + ".");
     return;
   }
+
+  // Need to recalculate cross sections since our energy changed
+  if (p.material() != MATERIAL_VOID)
+    model::materials[p.material()]->calculate_xs(p);
 }
 
 void finalize_train_neural_BC_batch()
@@ -267,17 +268,31 @@ void initialize_infer_neural_BC()
       std::make_unique<Ort::Session>(env, filename.c_str(), session_options);
   }
 
-  std::map<unsigned long, int64_t> onnx_map;
-  std::fstream f(
-    "/home/jctrieloff/Code/pytrainmc/entity_map.txt", std::ios_base::in);
-  unsigned long entity;
-  int64_t id;
-  while (f >> entity) {
-    f >> id;
-    onnx_map[entity] = id;
-    onnx_map_inv[id] = entity;
+  // Read mapping
+  hid_t maptype = H5Tcreate(H5T_COMPOUND, sizeof(struct MapType));
+  H5Tinsert(maptype, "entity", HOFFSET(MapType, entity), H5T_NATIVE_ULONG);
+  H5Tinsert(maptype, "nnid", HOFFSET(MapType, nnid), H5T_NATIVE_INT64);
+
+  std::vector<MapType> map_data;
+  // FIX: Need to make this take an arbitrary filename
+  //      Also test that the file, dset, etc. exists
+  hid_t mapfile = file_open("mappings.h5", 'r');
+  hid_t dset = H5Dopen(mapfile, "inference_nnids", H5P_DEFAULT);
+  hid_t dspace = H5Dget_space(dset);
+  hsize_t n_sites;
+  H5Sget_simple_extent_dims(dspace, &n_sites, nullptr);
+  map_data.resize(n_sites);
+  hid_t memspace = H5S_ALL;
+  H5Dread(dset, maptype, memspace, dspace, H5P_DEFAULT, map_data.data());
+  H5Sclose(dspace);
+  H5Dclose(dset);
+  H5Tclose(maptype);
+  file_close(mapfile);
+
+  for (MapType& entry : map_data) {
+    onnx_map[entry.entity] = entry.nnid;
+    onnx_map_inv[entry.nnid] = entry.entity;
   }
-  f.close();
 
   // Pre-allocate memory for model inputs
   for (int i = 0; i < omp_get_max_threads(); ++i) {
@@ -289,15 +304,20 @@ void initialize_infer_neural_BC()
     input.c_values = std::vector<float>(7);
     input.c_size = 7;
     for (int j = 2; j < 6; ++j) {
-      int w = onnx_model[i]
-                ->GetInputTypeInfo(j)
-                .GetTensorTypeAndShapeInfo()
-                .GetShape()[1];
-      if (w == 0) {
+      auto dims = onnx_model[i]
+                    ->GetInputTypeInfo(j)
+                    .GetTensorTypeAndShapeInfo()
+                    .GetShape()
+                    .size();
+      if (dims == 1) {
         input.n_shapes.push_back(std::vector<int64_t> {1});
         input.n_sizes.push_back(1);
         input.n_values.push_back(std::vector<float>(1));
       } else {
+        int w = onnx_model[i]
+                  ->GetInputTypeInfo(j)
+                  .GetTensorTypeAndShapeInfo()
+                  .GetShape()[1];
         input.n_shapes.push_back(std::vector<int64_t> {1, w});
         input.n_sizes.push_back(w);
         input.n_values.push_back(std::vector<float>(w));
