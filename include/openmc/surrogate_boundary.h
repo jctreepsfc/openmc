@@ -56,7 +56,7 @@ struct alignas(64) ONNXInput {
 // Non-member functions
 //==============================================================================
 
-extern std::vector<std::vector<NeuralBCData>> neural_boundary_crossings;
+extern std::vector<std::vector<NeuralBCData>> surrogate_boundary_crossings;
 // Want to pre-allocate the vectors used to prepare tensor data
 extern std::vector<ONNXInput> onnx_input_data;
 extern std::vector<std::vector<Ort::Value>> onnx_input_tensors;
@@ -71,22 +71,22 @@ extern std::map<unsigned long, int64_t> onnx_map;
 extern std::map<int64_t, unsigned long> onnx_map_inv;
 
 // Allocate vector for number of threads
-void initialize_train_neural_BC();
+void initialize_train_surrogate_BC();
 
-void initialize_train_neural_BC_batch();
+void initialize_train_surrogate_BC_batch();
 
 // This should just append data to the array
-void write_neural_BC_data(Particle& p, const Surface& surf);
+void write_surrogate_BC_data(Particle& p, const Surface& surf);
 
 // Write to hdf, clear vectors
-void finalize_train_neural_BC_batch();
+void finalize_train_surrogate_BC_batch();
 
 // Close the hdf file
-void finalize_train_neural_BC();
+void finalize_train_surrogate_BC();
 
-void initialize_infer_neural_BC();
+void initialize_infer_surrogate_BC();
 
-void infer_crossing_neural_BC(Particle& p, const Surface& surf);
+void infer_crossing_surrogate_BC(Particle& p, const Surface& surf);
 
 } // namespace openmc
 

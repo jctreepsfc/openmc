@@ -1,4 +1,4 @@
-#include "openmc/neural_boundary.h"
+#include "openmc/surrogate_boundary.h"
 #include "openmc/dagmc.h"
 #include "openmc/geometry.h"
 #include "openmc/hdf5_interface.h"
@@ -21,7 +21,7 @@ namespace openmc {
 hid_t boundary_file;
 hid_t cross_dtype;
 
-std::vector<std::vector<NeuralBCData>> neural_boundary_crossings;
+std::vector<std::vector<NeuralBCData>> surrogate_boundary_crossings;
 std::vector<ONNXInput> onnx_input_data;
 std::vector<std::vector<Ort::Value>> onnx_input_tensors;
 
@@ -36,11 +36,11 @@ const char* onnx_onames[] = {"returns", "s_in", "angle", "energy"};
 std::map<unsigned long, int64_t> onnx_map;
 std::map<int64_t, unsigned long> onnx_map_inv;
 
-void initialize_train_neural_BC()
+void initialize_train_surrogate_BC()
 {
   // Get the number of threads and pre-allocate
   for (int i = 0; i < omp_get_max_threads(); ++i) {
-    neural_boundary_crossings.push_back(std::vector<NeuralBCData> {});
+    surrogate_boundary_crossings.push_back(std::vector<NeuralBCData> {});
   }
 
   // Open hdf5 file
@@ -76,20 +76,20 @@ void initialize_train_neural_BC()
   H5Tclose(postype);
 }
 
-void initialize_train_neural_BC_batch()
+void initialize_train_surrogate_BC_batch()
 {
   // Empty per-thread memory before a new batch
   // This is called outside of omp parallel
   for (int i = 0; i < omp_get_max_threads(); ++i) {
-    neural_boundary_crossings[i].clear();
+    surrogate_boundary_crossings[i].clear();
   }
 }
 
-void write_neural_BC_data(Particle& p, const Surface& surf)
+void write_surrogate_BC_data(Particle& p, const Surface& surf)
 {
   // Get current thread's data vector
   std::vector<NeuralBCData>& bank_access =
-    neural_boundary_crossings[omp_get_thread_num()];
+    surrogate_boundary_crossings[omp_get_thread_num()];
   // Get last facet crossing
   moab::EntityHandle facet;
   MB_CHK_ERR_CONT(p.history().get_last_intersection(facet));
@@ -127,7 +127,7 @@ void write_neural_BC_data(Particle& p, const Surface& surf)
   bank_access.push_back(crossing);
 }
 
-void infer_crossing_neural_BC(Particle& p, const Surface& surf)
+void infer_crossing_surrogate_BC(Particle& p, const Surface& surf)
 {
   std::vector<Ort::Value>& model_input =
     onnx_input_tensors[omp_get_thread_num()];
@@ -214,12 +214,12 @@ void infer_crossing_neural_BC(Particle& p, const Surface& surf)
     model::materials[p.material()]->calculate_xs(p);
 }
 
-void finalize_train_neural_BC_batch()
+void finalize_train_surrogate_BC_batch()
 {
-  for (int thread = 0; thread < neural_boundary_crossings.size(); thread++) {
+  for (int thread = 0; thread < surrogate_boundary_crossings.size(); thread++) {
     std::string dset_name =
       fmt::format("crossing_{}_{}", simulation::current_batch, thread);
-    auto& bank_access = neural_boundary_crossings[thread];
+    auto& bank_access = surrogate_boundary_crossings[thread];
 
     hsize_t dims[] {static_cast<hsize_t>(bank_access.size())};
     hid_t dspace = H5Screate_simple(1, dims, nullptr);
@@ -232,13 +232,13 @@ void finalize_train_neural_BC_batch()
   }
 }
 
-void finalize_train_neural_BC()
+void finalize_train_surrogate_BC()
 {
   H5Tclose(cross_dtype);
   file_close(boundary_file);
 }
 
-void initialize_infer_neural_BC()
+void initialize_infer_surrogate_BC()
 {
   OrtThreadingOptions* tp_options = nullptr;
   auto ret = Ort::GetApi().CreateThreadingOptions(&tp_options);

@@ -104,7 +104,7 @@ extern bool weight_window_checkpoint_collision; //!< enable weight window check
                                                 //!< upon collision?
 extern bool write_all_tracks;     //!< write track files for every particle?
 extern bool write_initial_source; //!< write out initial source file?
-extern bool onnx_on;              //!< run with neural boundary condition?
+extern bool onnx_on;              //!< run with surrogate boundary condition?
 extern bool onnx_train_mode;      //!< training mode (vs inference mode)?
 
 // Paths to various files

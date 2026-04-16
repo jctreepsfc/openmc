@@ -6,7 +6,7 @@
 
 #include "openmc/constants.h"
 #include "openmc/error.h"
-#include "openmc/neural_boundary.h"
+#include "openmc/surrogate_boundary.h"
 #include "openmc/random_ray/random_ray.h"
 #include "openmc/surface.h"
 
@@ -274,14 +274,14 @@ void NeuralBC::handle_particle(Particle& p, const Surface& surf) const
     return;
   }
   if (settings::onnx_train_mode) {
-    write_neural_BC_data(p, surf);
+    write_surrogate_BC_data(p, surf);
     p.cross_surrogate_bc(surf);
     return;
   }
-  infer_crossing_neural_BC(p, surf);
+  infer_crossing_surrogate_BC(p, surf);
   // p.cross_surrogate_bc(surf);
   // Since this kind of looks like a vacuum BC, maybe need to have a
-  // cross_neural_bc here
+  // cross_surrogate_bc here
 }
 
 } // namespace openmc

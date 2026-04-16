@@ -378,7 +378,7 @@ list(APPEND libopenmc_SOURCES
   src/mgxs_interface.cpp
   src/ncrystal_interface.cpp
   src/ncrystal_load.cpp
-  src/neural_boundary.cpp
+  src/surrogate_boundary.cpp
   src/nuclide.cpp
   src/output.cpp
   src/particle.cpp

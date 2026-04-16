@@ -670,17 +670,17 @@ void read_settings_xml(pugi::xml_node root)
   }
 
   // Check if we are training an onnx model
-  if (check_for_node(root, "neural_boundary_condition")) {
-    pugi::xml_node node_neural_BC = root.child("neural_boundary_condition");
+  if (check_for_node(root, "surrogate_boundary_condition")) {
+    pugi::xml_node node_surrogate_BC = root.child("surrogate_boundary_condition");
 
     // Check if enabled
-    if (check_for_node(node_neural_BC, "enable")) {
-      onnx_on = get_node_value_bool(node_neural_BC, "enable");
+    if (check_for_node(node_surrogate_BC, "enable")) {
+      onnx_on = get_node_value_bool(node_surrogate_BC, "enable");
     }
 
     // Check for training mode
-    if (check_for_node(node_neural_BC, "train")) {
-      onnx_train_mode = get_node_value_bool(node_neural_BC, "train");
+    if (check_for_node(node_surrogate_BC, "train")) {
+      onnx_train_mode = get_node_value_bool(node_surrogate_BC, "train");
     }
   }
 

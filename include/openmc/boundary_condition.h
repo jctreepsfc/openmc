@@ -163,7 +163,7 @@ protected:
 };
 
 //==============================================================================
-//! A BC that uses a neural network to move particles through the problem
+//! A BC that uses a surrogate network to move particles through the problem
 //==============================================================================
 
 class NeuralBC : public BoundaryCondition {
