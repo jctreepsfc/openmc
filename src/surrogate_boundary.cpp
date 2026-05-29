@@ -62,6 +62,8 @@ void initialize_train_surrogate_BC()
     cross_dtype, "particle", HOFFSET(NeuralBCData, particle), H5T_NATIVE_INT);
   H5Tinsert(cross_dtype, "surface_id", HOFFSET(NeuralBCData, surface_id),
     H5T_NATIVE_ULONG);
+  H5Tinsert(
+    cross_dtype, "cell_id", HOFFSET(NeuralBCData, cell_id), H5T_NATIVE_INT);
   H5Tinsert(cross_dtype, "particle_id", HOFFSET(NeuralBCData, particle_id),
     H5T_NATIVE_INT);
   H5Tinsert(cross_dtype, "centroid", HOFFSET(NeuralBCData, centroid), postype);
@@ -115,7 +117,8 @@ void write_surrogate_BC_data(Particle& p, const Surface& surf)
   // Create the data
   NeuralBCData crossing;
   crossing.particle = p.type();
-  crossing.surface_id = static_cast<unsigned long>(facet); // surf.id_;
+  crossing.surface_id = static_cast<unsigned long>(facet);
+  crossing.cell_id = p.lowest_coord().cell();
   crossing.particle_id = p.id();
   crossing.centroid = centroid;
   crossing.normal = normal;
@@ -125,6 +128,12 @@ void write_surrogate_BC_data(Particle& p, const Surface& surf)
   crossing.time = p.time();
   crossing.wgt = p.wgt();
   bank_access.push_back(crossing);
+
+  // Kill particle if it crosses back into component
+  // cell_id is the last cell the particle was in before crossing
+  if (crossing.cell_id != p.cell_born()) {
+    p.wgt() = 0;
+  }
 }
 
 void infer_crossing_surrogate_BC(Particle& p, const Surface& surf)
@@ -167,11 +176,17 @@ void infer_crossing_surrogate_BC(Particle& p, const Surface& surf)
 
   // === MOVE THE PARTICLE ===
 
-  float is_return = out[0].GetTensorMutableData<float>()[0];
-  if (is_return < 0.5) {
-    p.wgt() = 0.0;
+  p.r_last() = p.r();
+  p.u_last() = p.u();
+  p.E_last() = p.E();
+  p.wgt_last() = p.wgt();
+
+  float wgt_mult = out[0].GetTensorMutableData<float>()[0];
+  if (wgt_mult < 1e-5) {
+    p.wgt() = 0.;
     return;
   }
+  p.wgt() *= wgt_mult;
 
   // Convert back from index to facet id
   int64_t facet_i = out[1].GetTensorMutableData<int64_t>()[0];
@@ -195,11 +210,16 @@ void infer_crossing_surrogate_BC(Particle& p, const Surface& surf)
   p.u().z = angle_i[2];
 
   p.E() = exp(out[3].GetTensorMutableData<float>()[0]);
+  // Kill the particle if the energy goes to zero: avoids nan down the line
+  if (p.E() == 0) {
+    p.wgt() = 0;
+    return;
+  }
 
   p.history().reset();
 
   p.r_last_current() = p.r() + TINY_BIT * p.u();
-  p.surface() = 0;
+  p.surface() = SURFACE_NONE;
   // Figure out what cell particle is in now
   p.n_coord() = 1;
   if (!exhaustive_find_cell(p)) {

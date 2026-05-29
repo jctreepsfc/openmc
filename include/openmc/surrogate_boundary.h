@@ -15,6 +15,7 @@ namespace openmc {
 struct NeuralBCData {
   ParticleType particle;
   unsigned long surface_id;
+  int cell_id;
   int64_t particle_id;
   Position centroid;
   Direction normal;

@@ -6,9 +6,9 @@
 
 #include "openmc/constants.h"
 #include "openmc/error.h"
-#include "openmc/surrogate_boundary.h"
 #include "openmc/random_ray/random_ray.h"
 #include "openmc/surface.h"
+#include "openmc/surrogate_boundary.h"
 
 #ifdef OPENMC_ONNX_ENABLED
 #include <onnxruntime_cxx_api.h>
@@ -256,16 +256,6 @@ void RotationalPeriodicBC::handle_particle(
 //==============================================================================
 // NeuralBC implementation
 //==============================================================================
-
-// NeuralBC::NeuralBC()
-// {
-//   // Need to also check that we crossed an active part of the surface
-//   // with the BC: can check if new cell == last cell
-//   // -> Actually shouldn't be an issue with DAG geometry
-//   if (settings::onnx_train_mode) {
-//     return;
-//   }
-// }
 
 void NeuralBC::handle_particle(Particle& p, const Surface& surf) const
 {
