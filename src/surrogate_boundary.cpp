@@ -92,6 +92,11 @@ void write_surrogate_BC_data(Particle& p, const Surface& surf)
   // Get current thread's data vector
   std::vector<NeuralBCData>& bank_access =
     surrogate_boundary_crossings[omp_get_thread_num()];
+  // Need last crossing to see if it is the same particle
+  long last_particle = -1;
+  if (!bank_access.empty())
+    last_particle = bank_access.back().particle_id;
+
   // Get last facet crossing
   moab::EntityHandle facet;
   MB_CHK_ERR_CONT(p.history().get_last_intersection(facet));
@@ -130,8 +135,7 @@ void write_surrogate_BC_data(Particle& p, const Surface& surf)
   bank_access.push_back(crossing);
 
   // Kill particle if it crosses back into component
-  // cell_id is the last cell the particle was in before crossing
-  if (crossing.cell_id != p.cell_born()) {
+  if (last_particle == p.id()) {
     p.wgt() = 0;
   }
 }
@@ -219,6 +223,7 @@ void infer_crossing_surrogate_BC(Particle& p, const Surface& surf)
   p.history().reset();
 
   p.r_last_current() = p.r() + TINY_BIT * p.u();
+  p.r() += TINY_BIT * p.u();
   p.surface() = SURFACE_NONE;
   // Figure out what cell particle is in now
   p.n_coord() = 1;
