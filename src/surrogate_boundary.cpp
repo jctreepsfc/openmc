@@ -267,15 +267,12 @@ void initialize_infer_surrogate_BC()
 {
   OrtThreadingOptions* tp_options = nullptr;
   auto ret = Ort::GetApi().CreateThreadingOptions(&tp_options);
-  // Set threads to 1 for intra-op if you want 1 core per OpenMP thread
-  // Alternatively, set to 0 to let ORT decide based on system cores
+  // Set threads to 1 for intra-op to get 1 core per OpenMP thread
   ret = Ort::GetApi().SetGlobalIntraOpNumThreads(tp_options, 1);
   ret = Ort::GetApi().SetGlobalInterOpNumThreads(tp_options, 1);
-  // CRITICAL: Disable spinning to stop idle threads from hogging 100% CPU
+  // Disable spinning to stop idle threads from hogging 100% CPU
   ret = Ort::GetApi().SetGlobalSpinControl(tp_options, 0);
-  // 2. Initialize the Environment with these Global Options
-  // The Env must live as long as all sessions exist (e.g., a global or class
-  // member)
+  // Initialize the environment
   ret = Ort::GetApi().CreateEnvWithGlobalThreadPools(
     ORT_LOGGING_LEVEL_WARNING, "Model", tp_options, &onnx_environment);
   Ort::Env env(onnx_environment);
