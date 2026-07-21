@@ -148,20 +148,13 @@ void infer_crossing_surrogate_BC(Particle& p, const Surface& surf)
     onnx_input_tensors[omp_get_thread_num()];
   ONNXInput& model_data = onnx_input_data[omp_get_thread_num()];
 
-  // === CONSTRUCT TENSOR WITH FACET INFO ===
-
+  // === Construct input tensors ===
   unsigned long facet;
   MB_CHK_ERR_CONT(p.history().get_last_intersection(facet));
-  // model_data.s_values = {static_cast<int64_t>(onnx_map.at(facet))};
-
-  // === CONSTRUCT TENSOR WITH CONTINUOUS PARTICLE DATA ===
-
   auto r = p.r();
   auto u = p.u();
   auto E = log(p.E());
-  // model_data.c_values = {static_cast<float>(r.x), static_cast<float>(r.y),
-  //   static_cast<float>(r.z), static_cast<float>(u.x),
-  //   static_cast<float>(u.y), static_cast<float>(u.z), static_cast<float>(E)};
+
   model_data.s_values[0] = static_cast<int64_t>(onnx_map.at(facet));
   model_data.c_values[0] = static_cast<float>(r.x);
   model_data.c_values[1] = static_cast<float>(r.y);
@@ -170,16 +163,6 @@ void infer_crossing_surrogate_BC(Particle& p, const Surface& surf)
   model_data.c_values[4] = static_cast<float>(u.y);
   model_data.c_values[5] = static_cast<float>(u.z);
   model_data.c_values[6] = static_cast<float>(E);
-
-  // === CONSTRUCT GUMBEL-MAX NOISE TENSORS ===
-
-  // for (int i = 0; i < 4; ++i) {
-  //   // Ex. for c_out: [-1, 7]
-  //   // Create tensor
-  //   for (int j = 0; j < model_data.n_sizes[i]; ++j) {
-  //     model_data.n_values[i][j] = prn(p.current_seed());
-  //   }
-  // }
 
   // === RUN THE MODEL ===
 
@@ -344,26 +327,6 @@ void initialize_infer_surrogate_BC()
     input.c_shape = {1, 7};
     input.c_values = std::vector<float>(7);
     input.c_size = 7;
-    // for (int j = 2; j < 6; ++j) {
-    //   auto dims = onnx_model[i]
-    //                 .GetInputTypeInfo(j)
-    //                 .GetTensorTypeAndShapeInfo()
-    //                 .GetShape()
-    //                 .size();
-    //   if (dims == 1) {
-    //     input.n_shapes.push_back(std::vector<int64_t> {1});
-    //     input.n_sizes.push_back(1);
-    //     input.n_values.push_back(std::vector<float>(1));
-    //   } else {
-    //     int w = onnx_model[i]
-    //               .GetInputTypeInfo(j)
-    //               .GetTensorTypeAndShapeInfo()
-    //               .GetShape()[1];
-    //     input.n_shapes.push_back(std::vector<int64_t> {1, w});
-    //     input.n_sizes.push_back(w);
-    //     input.n_values.push_back(std::vector<float>(w));
-    //   }
-    // }
     onnx_input_data.push_back(input);
   }
 
@@ -382,12 +345,6 @@ void initialize_infer_surrogate_BC()
     input_tensors.push_back(
       Ort::Value::CreateTensor<float>(onnx_memory_info, data.c_values.data(),
         data.c_size, data.c_shape.data(), data.c_shape.size()));
-    // Bind Noise data
-    // for (size_t j = 0; j < data.n_values.size(); ++j) {
-    //   input_tensors.push_back(Ort::Value::CreateTensor<float>(onnx_memory_info,
-    //     data.n_values[j].data(), data.n_sizes[j], data.n_shapes[j].data(),
-    //     data.n_shapes[j].size()));
-    // }
   }
 }
 

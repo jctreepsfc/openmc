@@ -47,10 +47,6 @@ struct alignas(64) ONNXInput {
   std::vector<int64_t> c_shape;
   std::vector<float> c_values;
   size_t c_size;
-  // Gumbel-Max noise data
-  // std::vector<std::vector<int64_t>> n_shapes;
-  // std::vector<std::vector<float>> n_values;
-  // std::vector<size_t> n_sizes;
 };
 
 //==============================================================================
