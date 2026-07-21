@@ -48,9 +48,9 @@ struct alignas(64) ONNXInput {
   std::vector<float> c_values;
   size_t c_size;
   // Gumbel-Max noise data
-  std::vector<std::vector<int64_t>> n_shapes;
-  std::vector<std::vector<float>> n_values;
-  std::vector<size_t> n_sizes;
+  // std::vector<std::vector<int64_t>> n_shapes;
+  // std::vector<std::vector<float>> n_values;
+  // std::vector<size_t> n_sizes;
 };
 
 //==============================================================================
@@ -63,7 +63,8 @@ extern std::vector<ONNXInput> onnx_input_data;
 extern std::vector<std::vector<Ort::Value>> onnx_input_tensors;
 
 extern OrtEnv* onnx_environment;
-extern std::vector<std::unique_ptr<Ort::Session>> onnx_model;
+extern Ort::Env* env;
+extern std::vector<Ort::Session> onnx_model;
 extern Ort::MemoryInfo onnx_memory_info;
 extern Ort::RunOptions onnx_runoptions;
 extern const char* onnx_inames[];
@@ -88,6 +89,8 @@ void finalize_train_surrogate_BC();
 void initialize_infer_surrogate_BC();
 
 void infer_crossing_surrogate_BC(Particle& p, const Surface& surf);
+
+void finalize_infer_surrogate_BC();
 
 } // namespace openmc
 

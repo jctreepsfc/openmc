@@ -26,12 +26,14 @@ std::vector<ONNXInput> onnx_input_data;
 std::vector<std::vector<Ort::Value>> onnx_input_tensors;
 
 OrtEnv* onnx_environment = nullptr;
-std::vector<std::unique_ptr<Ort::Session>> onnx_model;
+Ort::Env* env = nullptr;
+std::vector<Ort::Session> onnx_model;
 Ort::MemoryInfo onnx_memory_info =
   Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 Ort::RunOptions onnx_runoptions {nullptr};
-const char* onnx_inames[] = {"s_out", "c_out", "return_target", "tile_target",
-  "angle_target", "energy_target"};
+const char* onnx_inames[] = {
+  "s_out", "c_out"}; //, "return_target", "tile_target",
+                     //"angle_target", "energy_target"};
 const char* onnx_onames[] = {"returns", "s_in", "angle", "energy"};
 std::map<unsigned long, int64_t> onnx_map;
 std::map<int64_t, unsigned long> onnx_map_inv;
@@ -150,33 +152,41 @@ void infer_crossing_surrogate_BC(Particle& p, const Surface& surf)
 
   unsigned long facet;
   MB_CHK_ERR_CONT(p.history().get_last_intersection(facet));
-  model_data.s_values = {static_cast<int64_t>(onnx_map.at(facet))};
+  // model_data.s_values = {static_cast<int64_t>(onnx_map.at(facet))};
 
   // === CONSTRUCT TENSOR WITH CONTINUOUS PARTICLE DATA ===
 
   auto r = p.r();
   auto u = p.u();
   auto E = log(p.E());
-  model_data.c_values = {static_cast<float>(r.x), static_cast<float>(r.y),
-    static_cast<float>(r.z), static_cast<float>(u.x), static_cast<float>(u.y),
-    static_cast<float>(u.z), static_cast<float>(E)};
+  // model_data.c_values = {static_cast<float>(r.x), static_cast<float>(r.y),
+  //   static_cast<float>(r.z), static_cast<float>(u.x),
+  //   static_cast<float>(u.y), static_cast<float>(u.z), static_cast<float>(E)};
+  model_data.s_values[0] = static_cast<int64_t>(onnx_map.at(facet));
+  model_data.c_values[0] = static_cast<float>(r.x);
+  model_data.c_values[1] = static_cast<float>(r.y);
+  model_data.c_values[2] = static_cast<float>(r.z);
+  model_data.c_values[3] = static_cast<float>(u.x);
+  model_data.c_values[4] = static_cast<float>(u.y);
+  model_data.c_values[5] = static_cast<float>(u.z);
+  model_data.c_values[6] = static_cast<float>(E);
 
   // === CONSTRUCT GUMBEL-MAX NOISE TENSORS ===
 
-  for (int i = 0; i < 4; ++i) {
-    // Ex. for c_out: [-1, 7]
-    // Create tensor
-    for (int j = 0; j < model_data.n_sizes[i]; ++j) {
-      model_data.n_values[i][j] = prn(p.current_seed());
-    }
-  }
+  // for (int i = 0; i < 4; ++i) {
+  //   // Ex. for c_out: [-1, 7]
+  //   // Create tensor
+  //   for (int j = 0; j < model_data.n_sizes[i]; ++j) {
+  //     model_data.n_values[i][j] = prn(p.current_seed());
+  //   }
+  // }
 
   // === RUN THE MODEL ===
 
   // NOTE: We do not create the tensors, since they have already been setup to
   // point at the memory of model.values
-  auto out = onnx_model[omp_get_thread_num()]->Run(
-    onnx_runoptions, onnx_inames, model_input.data(), 6, onnx_onames, 4);
+  auto out = onnx_model[omp_get_thread_num()].Run(
+    onnx_runoptions, onnx_inames, model_input.data(), 2, onnx_onames, 4);
 
   // === MOVE THE PARTICLE ===
 
@@ -275,19 +285,28 @@ void initialize_infer_surrogate_BC()
   // Initialize the environment
   ret = Ort::GetApi().CreateEnvWithGlobalThreadPools(
     ORT_LOGGING_LEVEL_WARNING, "Model", tp_options, &onnx_environment);
-  Ort::Env env(onnx_environment);
+  env = new Ort::Env(onnx_environment);
   // Clean up the helper (Env takes a copy)
   Ort::GetApi().ReleaseThreadingOptions(tp_options);
 
+  // OrtCUDAProviderOptionsV2* cuda_options = nullptr;
+  // ret = Ort::GetApi().CreateCUDAProviderOptions(&cuda_options);
+  // std::vector<const char*> keys {"device_id", "do_copy_in_default_stream"};
+  // std::vector<const char*> values {"0", "0"};
+  // ret = Ort::GetApi().UpdateCUDAProviderOptions(
+  //   cuda_options, keys.data(), values.data(), (int)keys.size());
+
+  Ort::SessionOptions session_options;
+  session_options.SetIntraOpNumThreads(1);
+  session_options.DisablePerSessionThreads();
+  session_options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
+  // ret = Ort::GetApi().SessionOptionsAppendExecutionProvider_CUDA_V2(
+  //   session_options, cuda_options);
+  // Ort::GetApi().ReleaseCUDAProviderOptions(cuda_options);
+
   std::string filename = fmt::format("{}model.onnx", settings::path_output);
-  onnx_model.resize(omp_get_max_threads());
   for (int i = 0; i < omp_get_max_threads(); ++i) {
-    Ort::SessionOptions session_options;
-    session_options.SetIntraOpNumThreads(1);
-    session_options.DisablePerSessionThreads();
-    session_options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
-    onnx_model[i] =
-      std::make_unique<Ort::Session>(env, filename.c_str(), session_options);
+    onnx_model.emplace_back(*env, filename.c_str(), session_options);
   }
 
   // Read mapping
@@ -325,26 +344,26 @@ void initialize_infer_surrogate_BC()
     input.c_shape = {1, 7};
     input.c_values = std::vector<float>(7);
     input.c_size = 7;
-    for (int j = 2; j < 6; ++j) {
-      auto dims = onnx_model[i]
-                    ->GetInputTypeInfo(j)
-                    .GetTensorTypeAndShapeInfo()
-                    .GetShape()
-                    .size();
-      if (dims == 1) {
-        input.n_shapes.push_back(std::vector<int64_t> {1});
-        input.n_sizes.push_back(1);
-        input.n_values.push_back(std::vector<float>(1));
-      } else {
-        int w = onnx_model[i]
-                  ->GetInputTypeInfo(j)
-                  .GetTensorTypeAndShapeInfo()
-                  .GetShape()[1];
-        input.n_shapes.push_back(std::vector<int64_t> {1, w});
-        input.n_sizes.push_back(w);
-        input.n_values.push_back(std::vector<float>(w));
-      }
-    }
+    // for (int j = 2; j < 6; ++j) {
+    //   auto dims = onnx_model[i]
+    //                 .GetInputTypeInfo(j)
+    //                 .GetTensorTypeAndShapeInfo()
+    //                 .GetShape()
+    //                 .size();
+    //   if (dims == 1) {
+    //     input.n_shapes.push_back(std::vector<int64_t> {1});
+    //     input.n_sizes.push_back(1);
+    //     input.n_values.push_back(std::vector<float>(1));
+    //   } else {
+    //     int w = onnx_model[i]
+    //               .GetInputTypeInfo(j)
+    //               .GetTensorTypeAndShapeInfo()
+    //               .GetShape()[1];
+    //     input.n_shapes.push_back(std::vector<int64_t> {1, w});
+    //     input.n_sizes.push_back(w);
+    //     input.n_values.push_back(std::vector<float>(w));
+    //   }
+    // }
     onnx_input_data.push_back(input);
   }
 
@@ -353,23 +372,40 @@ void initialize_infer_surrogate_BC()
   onnx_input_tensors.resize(omp_get_max_threads());
   for (int i = 0; i < omp_get_max_threads(); ++i) {
     auto& data = onnx_input_data[i];
-    auto& thread_tensors = onnx_input_tensors[i];
-    thread_tensors.reserve(6); // Total number of inputs
+    auto& input_tensors = onnx_input_tensors[i];
+    input_tensors.reserve(6); // Total number of inputs
     // Bind s_values
-    thread_tensors.push_back(
+    input_tensors.push_back(
       Ort::Value::CreateTensor<int64_t>(onnx_memory_info, data.s_values.data(),
         data.s_size, data.s_shape.data(), data.s_shape.size()));
     // Bind c_values
-    thread_tensors.push_back(
+    input_tensors.push_back(
       Ort::Value::CreateTensor<float>(onnx_memory_info, data.c_values.data(),
         data.c_size, data.c_shape.data(), data.c_shape.size()));
     // Bind Noise data
-    for (size_t j = 0; j < data.n_values.size(); ++j) {
-      thread_tensors.push_back(Ort::Value::CreateTensor<float>(onnx_memory_info,
-        data.n_values[j].data(), data.n_sizes[j], data.n_shapes[j].data(),
-        data.n_shapes[j].size()));
-    }
+    // for (size_t j = 0; j < data.n_values.size(); ++j) {
+    //   input_tensors.push_back(Ort::Value::CreateTensor<float>(onnx_memory_info,
+    //     data.n_values[j].data(), data.n_sizes[j], data.n_shapes[j].data(),
+    //     data.n_shapes[j].size()));
+    // }
   }
+}
+
+void finalize_infer_surrogate_BC()
+{
+  for (auto& tensors : onnx_input_tensors)
+    tensors.clear();
+  onnx_input_tensors.clear();
+
+  onnx_model.clear();
+
+  delete env;
+  env = nullptr;
+  onnx_environment = nullptr;
+
+  onnx_input_data.clear();
+  onnx_map.clear();
+  onnx_map_inv.clear();
 }
 
 #endif // OPENMC_ONNX_ENABLED

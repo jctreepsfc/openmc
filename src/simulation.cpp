@@ -11,7 +11,6 @@
 #include "openmc/ifp.h"
 #include "openmc/material.h"
 #include "openmc/message_passing.h"
-#include "openmc/surrogate_boundary.h"
 #include "openmc/nuclide.h"
 #include "openmc/output.h"
 #include "openmc/particle.h"
@@ -20,6 +19,7 @@
 #include "openmc/settings.h"
 #include "openmc/source.h"
 #include "openmc/state_point.h"
+#include "openmc/surrogate_boundary.h"
 #include "openmc/tallies/derivative.h"
 #include "openmc/tallies/filter.h"
 #include "openmc/tallies/tally.h"
@@ -201,8 +201,12 @@ int openmc_simulation_finalize()
 
 #ifdef OPENMC_ONNX_ENABLED
   // Close surrogate BC hdf file
-  if (settings::onnx_train_mode && settings::onnx_on) {
-    finalize_train_surrogate_BC();
+  if (settings::onnx_on) {
+    if (settings::onnx_train_mode) {
+      finalize_train_surrogate_BC();
+    } else {
+      finalize_infer_surrogate_BC();
+    }
   }
 #endif
 
