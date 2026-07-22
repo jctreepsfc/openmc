@@ -1,9 +1,12 @@
 #include "openmc/surrogate_boundary.h"
+#include "openmc/bank.h"
 #include "openmc/dagmc.h"
 #include "openmc/geometry.h"
 #include "openmc/hdf5_interface.h"
 #include "openmc/material.h"
+#include "openmc/memory.h"
 #include "openmc/position.h"
+#include "openmc/shared_array.h"
 #include "openmc/simulation.h"
 #include "openmc/surface.h"
 
@@ -22,18 +25,14 @@ hid_t boundary_file;
 hid_t cross_dtype;
 
 std::vector<std::vector<NeuralBCData>> surrogate_boundary_crossings;
-std::vector<ONNXInput> onnx_input_data;
-std::vector<std::vector<Ort::Value>> onnx_input_tensors;
 
 OrtEnv* onnx_environment = nullptr;
 Ort::Env* env = nullptr;
-std::vector<Ort::Session> onnx_model;
+Ort::Session onnx_model {nullptr};
 Ort::MemoryInfo onnx_memory_info =
   Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 Ort::RunOptions onnx_runoptions {nullptr};
-const char* onnx_inames[] = {
-  "s_out", "c_out"}; //, "return_target", "tile_target",
-                     //"angle_target", "energy_target"};
+const char* onnx_inames[] = {"s_out", "c_out"};
 const char* onnx_onames[] = {"returns", "s_in", "angle", "energy"};
 std::map<unsigned long, int64_t> onnx_map;
 std::map<int64_t, unsigned long> onnx_map_inv;
@@ -142,94 +141,88 @@ void write_surrogate_BC_data(Particle& p, const Surface& surf)
   }
 }
 
-void infer_crossing_surrogate_BC(Particle& p, const Surface& surf)
+void infer_crossing_surrogate_BC(
+  std::vector<SurrogateSite>& bank, SharedArray<SourceSite>& shared_bank)
 {
-  std::vector<Ort::Value>& model_input =
-    onnx_input_tensors[omp_get_thread_num()];
-  ONNXInput& model_data = onnx_input_data[omp_get_thread_num()];
-
-  // === Construct input tensors ===
-  unsigned long facet;
-  MB_CHK_ERR_CONT(p.history().get_last_intersection(facet));
-  auto r = p.r();
-  auto u = p.u();
-  auto E = log(p.E());
-
-  model_data.s_values[0] = static_cast<int64_t>(onnx_map.at(facet));
-  model_data.c_values[0] = static_cast<float>(r.x);
-  model_data.c_values[1] = static_cast<float>(r.y);
-  model_data.c_values[2] = static_cast<float>(r.z);
-  model_data.c_values[3] = static_cast<float>(u.x);
-  model_data.c_values[4] = static_cast<float>(u.y);
-  model_data.c_values[5] = static_cast<float>(u.z);
-  model_data.c_values[6] = static_cast<float>(E);
-
-  // === RUN THE MODEL ===
-
-  // NOTE: We do not create the tensors, since they have already been setup to
-  // point at the memory of model.values
-  auto out = onnx_model[omp_get_thread_num()].Run(
-    onnx_runoptions, onnx_inames, model_input.data(), 2, onnx_onames, 4);
-
-  // === MOVE THE PARTICLE ===
-
-  p.r_last() = p.r();
-  p.u_last() = p.u();
-  p.E_last() = p.E();
-  p.wgt_last() = p.wgt();
-
-  float wgt_mult = out[0].GetTensorMutableData<float>()[0];
-  if (wgt_mult < 1e-5) {
-    p.wgt() = 0.;
+  // Prepare the input data
+  ONNXInput input_data;
+  int batches = bank.size();
+  if (batches < 1) {
     return;
   }
-  p.wgt() *= wgt_mult;
-
-  // Convert back from index to facet id
-  int64_t facet_i = out[1].GetTensorMutableData<int64_t>()[0];
-  facet = onnx_map_inv.at(facet_i);
-  // Get the centroid of the facet
-  auto dag_ptr = dynamic_cast<const DAGSurface&>(surf).dagmc_ptr();
-  std::vector<moab::EntityHandle> vertex_handles;
-  dag_ptr->moab_instance()->get_adjacencies(
-    &facet, 1, 0, false, vertex_handles);
-  std::vector<double> coords(9);
-  dag_ptr->moab_instance()->get_coords(
-    &vertex_handles[0], vertex_handles.size(), coords.data());
-
-  p.r().x = (coords[0] + coords[3] + coords[6]) / 3.0;
-  p.r().y = (coords[1] + coords[4] + coords[7]) / 3.0;
-  p.r().z = (coords[2] + coords[5] + coords[8]) / 3.0;
-
-  float* angle_i = out[2].GetTensorMutableData<float>();
-  p.u().x = angle_i[0];
-  p.u().y = angle_i[1];
-  p.u().z = angle_i[2];
-
-  p.E() = exp(out[3].GetTensorMutableData<float>()[0]);
-  // Kill the particle if the energy goes to zero: avoids nan down the line
-  if (p.E() == 0) {
-    p.wgt() = 0;
-    return;
+  input_data.s_shape = {batches};
+  input_data.s_size = batches;
+  input_data.c_shape = {batches, 7};
+  input_data.c_size = batches * 7;
+  input_data.s_values.reserve(batches);
+  input_data.c_values.reserve(batches * 7);
+  for (const SurrogateSite& site : bank) {
+    input_data.s_values.push_back(onnx_map.at(site.facet));
+    input_data.c_values.push_back(site.r.x);
+    input_data.c_values.push_back(site.r.y);
+    input_data.c_values.push_back(site.r.z);
+    input_data.c_values.push_back(site.u.x);
+    input_data.c_values.push_back(site.u.y);
+    input_data.c_values.push_back(site.u.z);
+    input_data.c_values.push_back(log(site.E));
   }
 
-  p.history().reset();
+  // Create the tensors
+  std::vector<Ort::Value> input_tensors;
+  input_tensors.push_back(Ort::Value::CreateTensor<int64_t>(onnx_memory_info,
+    input_data.s_values.data(), input_data.s_size, input_data.s_shape.data(),
+    input_data.s_shape.size()));
+  input_tensors.push_back(Ort::Value::CreateTensor<float>(onnx_memory_info,
+    input_data.c_values.data(), input_data.c_size, input_data.c_shape.data(),
+    input_data.c_shape.size()));
 
-  p.r_last_current() = p.r() + TINY_BIT * p.u();
-  p.r() += TINY_BIT * p.u();
-  p.surface() = SURFACE_NONE;
-  // Figure out what cell particle is in now
-  p.n_coord() = 1;
-  if (!exhaustive_find_cell(p)) {
-    p.mark_as_lost("Couldn't find particle after hitting surrogate "
-                   "boundary on surface " +
-                   std::to_string(surf.id_) + ".");
-    return;
+  auto out = onnx_model.Run(
+    onnx_runoptions, onnx_inames, input_tensors.data(), 2, onnx_onames, 4);
+
+  // Create the bank
+  std::vector<SourceSite> newbank;
+  for (int i = 0; i < batches; ++i) {
+    SourceSite tmp;
+    float wgt_mult = out[0].GetTensorMutableData<float>()[i];
+    if (wgt_mult < 1e-5)
+      wgt_mult = 0.;
+    tmp.wgt = bank[i].wgt * wgt_mult;
+    int64_t facet_i = out[1].GetTensorMutableData<int64_t>()[i];
+    unsigned long facet = onnx_map_inv.at(facet_i);
+
+    auto& surf = model::surfaces[bank[i].surf_id];
+    auto dag_ptr = dynamic_cast<const DAGSurface&>(*surf).dagmc_ptr();
+    std::vector<moab::EntityHandle> vertex_handles;
+    dag_ptr->moab_instance()->get_adjacencies(
+      &facet, 1, 0, false, vertex_handles);
+    std::vector<double> coords(9);
+    dag_ptr->moab_instance()->get_coords(
+      &vertex_handles[0], vertex_handles.size(), coords.data());
+    tmp.r.x = (coords[0] + coords[3] + coords[6]) / 3.0;
+    tmp.r.y = (coords[1] + coords[4] + coords[7]) / 3.0;
+    tmp.r.z = (coords[2] + coords[5] + coords[8]) / 3.0;
+
+    float* angle_i = out[2].GetTensorMutableData<float>();
+    tmp.u.x = angle_i[i * 3];
+    tmp.u.y = angle_i[i * 3 + 1];
+    tmp.u.z = angle_i[i * 3 + 2];
+
+    tmp.E = exp(out[3].GetTensorMutableData<float>()[i]);
+    if (tmp.E == 0)
+      tmp.wgt = 0.;
+    // Advance off the surrogate surface by a little bit
+    tmp.r += TINY_BIT * tmp.u;
+    tmp.surf_id = SURFACE_NONE;
+    // Add other info we need
+    tmp.parent_id = bank[i].parent_id;
+    tmp.progeny_id = bank[i].progeny_id;
+    tmp.particle = bank[i].particle;
+    tmp.wgt_born = bank[i].wgt_born;
+    tmp.wgt_ww_born = bank[i].wgt_ww_born;
+    tmp.n_split = bank[i].n_split;
+    // Add this source site to the shared surrogate bank
+    shared_bank.thread_unsafe_append(tmp);
   }
-
-  // Need to recalculate cross sections since our energy changed
-  if (p.material() != MATERIAL_VOID)
-    model::materials[p.material()]->calculate_xs(p);
 }
 
 void finalize_train_surrogate_BC_batch()
@@ -272,25 +265,23 @@ void initialize_infer_surrogate_BC()
   // Clean up the helper (Env takes a copy)
   Ort::GetApi().ReleaseThreadingOptions(tp_options);
 
-  // OrtCUDAProviderOptionsV2* cuda_options = nullptr;
-  // ret = Ort::GetApi().CreateCUDAProviderOptions(&cuda_options);
-  // std::vector<const char*> keys {"device_id", "do_copy_in_default_stream"};
-  // std::vector<const char*> values {"0", "0"};
-  // ret = Ort::GetApi().UpdateCUDAProviderOptions(
-  //   cuda_options, keys.data(), values.data(), (int)keys.size());
+  OrtCUDAProviderOptionsV2* cuda_options = nullptr;
+  ret = Ort::GetApi().CreateCUDAProviderOptions(&cuda_options);
+  std::vector<const char*> keys {"device_id", "do_copy_in_default_stream"};
+  std::vector<const char*> values {"0", "1"};
+  ret = Ort::GetApi().UpdateCUDAProviderOptions(
+    cuda_options, keys.data(), values.data(), (int)keys.size());
 
   Ort::SessionOptions session_options;
   session_options.SetIntraOpNumThreads(1);
   session_options.DisablePerSessionThreads();
   session_options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
-  // ret = Ort::GetApi().SessionOptionsAppendExecutionProvider_CUDA_V2(
-  //   session_options, cuda_options);
-  // Ort::GetApi().ReleaseCUDAProviderOptions(cuda_options);
+  ret = Ort::GetApi().SessionOptionsAppendExecutionProvider_CUDA_V2(
+    session_options, cuda_options);
+  Ort::GetApi().ReleaseCUDAProviderOptions(cuda_options);
 
   std::string filename = fmt::format("{}model.onnx", settings::path_output);
-  for (int i = 0; i < omp_get_max_threads(); ++i) {
-    onnx_model.emplace_back(*env, filename.c_str(), session_options);
-  }
+  onnx_model = Ort::Session(*env, filename.c_str(), session_options);
 
   // Read mapping
   hid_t maptype = H5Tcreate(H5T_COMPOUND, sizeof(struct MapType));
@@ -317,50 +308,16 @@ void initialize_infer_surrogate_BC()
     onnx_map[entry.entity] = entry.nnid;
     onnx_map_inv[entry.nnid] = entry.entity;
   }
-
-  // Pre-allocate memory for model inputs
-  for (int i = 0; i < omp_get_max_threads(); ++i) {
-    ONNXInput input;
-    input.s_shape = {1};
-    input.s_values = std::vector<int64_t>(1);
-    input.s_size = 1;
-    input.c_shape = {1, 7};
-    input.c_values = std::vector<float>(7);
-    input.c_size = 7;
-    onnx_input_data.push_back(input);
-  }
-
-  // Now we set up our tensors to point permanently at the data
-  // NOTE: This allows us to never actually create a tensor during the loop
-  onnx_input_tensors.resize(omp_get_max_threads());
-  for (int i = 0; i < omp_get_max_threads(); ++i) {
-    auto& data = onnx_input_data[i];
-    auto& input_tensors = onnx_input_tensors[i];
-    input_tensors.reserve(6); // Total number of inputs
-    // Bind s_values
-    input_tensors.push_back(
-      Ort::Value::CreateTensor<int64_t>(onnx_memory_info, data.s_values.data(),
-        data.s_size, data.s_shape.data(), data.s_shape.size()));
-    // Bind c_values
-    input_tensors.push_back(
-      Ort::Value::CreateTensor<float>(onnx_memory_info, data.c_values.data(),
-        data.c_size, data.c_shape.data(), data.c_shape.size()));
-  }
 }
 
 void finalize_infer_surrogate_BC()
 {
-  for (auto& tensors : onnx_input_tensors)
-    tensors.clear();
-  onnx_input_tensors.clear();
-
-  onnx_model.clear();
+  onnx_model.release();
 
   delete env;
   env = nullptr;
   onnx_environment = nullptr;
 
-  onnx_input_data.clear();
   onnx_map.clear();
   onnx_map_inv.clear();
 }

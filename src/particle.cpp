@@ -78,6 +78,40 @@ double Particle::mass() const
   }
 }
 
+bool Particle::create_surrogate_secondary()
+{
+  // If energy is below cutoff for this particle, don't create secondary
+  // particle
+  int idx = type().transport_index();
+  if (idx == C_NONE) {
+    return false;
+  }
+  if (E() < settings::energy_cutoff[idx]) {
+    return false;
+  }
+
+  unsigned long facet;
+  MB_CHK_ERR_CONT(history().get_last_intersection(facet));
+
+  SurrogateSite bank;
+  bank.particle = type();
+  bank.wgt = wgt();
+  bank.r = r();
+  bank.u = u();
+  bank.E = E();
+  bank.time = time();
+  bank.facet = facet;
+  bank_second_E() += bank.E;
+  bank.surf_id = surface_index();
+  bank.parent_id = current_work();
+  bank.progeny_id = n_progeny()++;
+  bank.wgt_born = wgt_born();
+  bank.wgt_ww_born = wgt_ww_born();
+  bank.n_split = n_split();
+  local_surrogate_bank().emplace_back(bank);
+  return true;
+}
+
 bool Particle::create_secondary(
   double wgt, Direction u, double E, ParticleType type)
 {

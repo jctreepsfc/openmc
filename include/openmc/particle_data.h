@@ -57,6 +57,26 @@ struct SourceSite {
   int64_t n_split {0};
 };
 
+struct SurrogateSite {
+  Position r;
+  Direction u;
+  double E;
+  double time {0.0};
+  double wgt {1.0};
+  int delayed_group {0};
+  int surf_id {SURFACE_NONE};
+  ParticleType particle;
+  unsigned long facet;
+
+  // Extra attributes that don't show up in source written to file
+  int parent_nuclide {-1};
+  int64_t parent_id {0};
+  int64_t progeny_id {0};
+  double wgt_born {1.0};
+  double wgt_ww_born {-1.0};
+  int64_t n_split {0};
+};
+
 struct CollisionTrackSite {
   Position r;
   Direction u;
@@ -537,6 +557,7 @@ private:
   int stream_;
 
   vector<SourceSite> local_secondary_bank_;
+  vector<SurrogateSite> local_surrogate_bank_;
 
   // Keep track of how many secondary particles were created in the collision
   // and what the starting index is in the secondary bank for this particle
@@ -704,6 +725,19 @@ public:
   decltype(local_secondary_bank_)& local_secondary_bank()
   {
     return local_secondary_bank_;
+  }
+
+  SurrogateSite& local_surrogate_bank(int i)
+  {
+    return local_surrogate_bank_[i];
+  }
+  const SurrogateSite& local_surrogate_bank(int i) const
+  {
+    return local_surrogate_bank_[i];
+  }
+  decltype(local_surrogate_bank_)& local_surrogate_bank()
+  {
+    return local_surrogate_bank_;
   }
 
   // Number of secondaries created in a collision

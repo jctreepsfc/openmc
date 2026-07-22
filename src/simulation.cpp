@@ -400,6 +400,7 @@ void collect_sorted_history_secondary_banks(
   }
 
   if (n_collected != n_progeny) {
+    write_message(3, "Counted: {}, Expected: {}", n_collected, n_progeny);
     fatal_error("Mismatch detected between sum of all particle progeny and "
                 "secondary bank size during collection.");
   }
@@ -1046,12 +1047,14 @@ void transport_history_based_shared_secondary()
     simulation::progeny_per_particle.end(), 0);
 
   vector<vector<SourceSite>> thread_banks(num_threads());
+  vector<vector<SurrogateSite>> surrogate_thread_banks(num_threads());
 
   // Phase 1: Transport primary particles and deposit first generation of
   // secondaries in the shared secondary bank
 #pragma omp parallel
   {
     auto& thread_bank = thread_banks[thread_num()];
+    auto& surrogate_bank = surrogate_thread_banks[thread_num()];
     Particle p;
 
 #pragma omp for schedule(runtime)
@@ -1061,9 +1064,32 @@ void transport_history_based_shared_secondary()
       for (auto& site : p.local_secondary_bank()) {
         thread_bank.push_back(site);
       }
+      for (auto& site : p.local_surrogate_bank()) {
+        surrogate_bank.push_back(site);
+      }
       p.local_secondary_bank().clear();
+      p.local_surrogate_bank().clear();
     }
   }
+
+  // Accumulate surrogate_bank into onnx buffers and perform inference
+  vector<SurrogateSite> tmp_surrogate_bank;
+  for (auto bank : surrogate_thread_banks) {
+    tmp_surrogate_bank.insert(
+      tmp_surrogate_bank.end(), bank.begin(), bank.end());
+  }
+  surrogate_thread_banks.clear();
+  infer_crossing_surrogate_BC(
+    tmp_surrogate_bank, simulation::shared_surrogate_bank);
+  tmp_surrogate_bank.clear();
+  vector<SourceSite> surrogate_extra_thread_bank;
+  for (int i = 0; i < simulation::shared_surrogate_bank.size(); ++i) {
+    surrogate_extra_thread_bank.push_back(simulation::shared_surrogate_bank[i]);
+  }
+  simulation::shared_surrogate_bank.clear();
+  thread_banks.push_back(surrogate_extra_thread_bank);
+  surrogate_extra_thread_bank.clear();
+
   collect_sorted_history_secondary_banks(thread_banks);
   thread_banks.clear();
 
@@ -1103,17 +1129,19 @@ void transport_history_based_shared_secondary()
       simulation::shared_secondary_bank_read.size());
     std::fill(simulation::progeny_per_particle.begin(),
       simulation::progeny_per_particle.end(), 0);
+    surrogate_thread_banks.resize(num_threads());
     thread_banks.resize(num_threads());
 
     // Transport all secondary tracks from the shared secondary bank
 #pragma omp parallel
     {
       auto& thread_bank = thread_banks[thread_num()];
+      auto& surrogate_bank = surrogate_thread_banks[thread_num()];
       Particle p;
 
 #pragma omp for schedule(runtime)
       for (int64_t i = 1; i <= simulation::shared_secondary_bank_read.size();
-           i++) {
+        i++) {
         initialize_particle_track(p, i, true);
         SourceSite& site = simulation::shared_secondary_bank_read[i - 1];
         p.event_revive_from_secondary(site);
@@ -1121,14 +1149,37 @@ void transport_history_based_shared_secondary()
         for (auto& secondary_site : p.local_secondary_bank()) {
           thread_bank.push_back(secondary_site);
         }
+        for (auto& site : p.local_surrogate_bank()) {
+          surrogate_bank.push_back(site);
+        }
         p.local_secondary_bank().clear();
+        p.local_surrogate_bank().clear();
       }
     } // End of transport loop over tracks in shared secondary bank
+
+    // Accumulate surrogate_bank into onnx buffers and perform inference
+    for (auto bank : surrogate_thread_banks) {
+      tmp_surrogate_bank.insert(
+        tmp_surrogate_bank.end(), bank.begin(), bank.end());
+    }
+    surrogate_thread_banks.clear();
+    infer_crossing_surrogate_BC(
+      tmp_surrogate_bank, simulation::shared_surrogate_bank);
+    tmp_surrogate_bank.clear();
+    for (int i = 0; i < simulation::shared_surrogate_bank.size(); ++i) {
+      surrogate_extra_thread_bank.push_back(
+        simulation::shared_surrogate_bank[i]);
+    }
+    simulation::shared_surrogate_bank.clear();
+    thread_banks.push_back(surrogate_extra_thread_bank);
+    surrogate_extra_thread_bank.clear();
+
     simulation::shared_secondary_bank_write =
       std::move(simulation::shared_secondary_bank_read);
     simulation::shared_secondary_bank_read = SharedArray<SourceSite>();
     collect_sorted_history_secondary_banks(thread_banks);
     thread_banks.clear();
+
     n_generation_depth++;
     simulation::simulation_tracks_completed += alive_secondary;
   } // End of loop over secondary generations

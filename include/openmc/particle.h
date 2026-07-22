@@ -51,6 +51,7 @@ public:
   //! \param type Particle type
   //! \return Whether a secondary particle was created
   bool create_secondary(double wgt, Direction u, double E, ParticleType type);
+  bool create_surrogate_secondary();
 
   //! split a particle
   //

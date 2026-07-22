@@ -278,7 +278,9 @@ void NeuralBC::handle_particle(Particle& p, const Surface& surf) const
     p.cross_surrogate_bc(surf);
     return;
   }
-  infer_crossing_surrogate_BC(p, surf);
+  p.create_surrogate_secondary();
+  p.wgt() = 0.;
+  // infer_crossing_surrogate_BC(p, surf);
   // p.cross_surrogate_bc(surf);
   // Since this kind of looks like a vacuum BC, maybe need to have a
   // cross_surrogate_bc here

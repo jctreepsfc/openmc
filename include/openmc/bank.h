@@ -6,6 +6,7 @@
 #include "openmc/particle.h"
 #include "openmc/position.h"
 #include "openmc/shared_array.h"
+#include "openmc/surrogate_boundary.h"
 #include "openmc/vector.h"
 
 namespace openmc {
@@ -36,6 +37,7 @@ extern vector<int64_t> progeny_per_particle;
 
 extern SharedArray<SourceSite> shared_secondary_bank_read;
 extern SharedArray<SourceSite> shared_secondary_bank_write;
+extern SharedArray<SourceSite> shared_surrogate_bank;
 
 } // namespace simulation
 

@@ -3,6 +3,7 @@
 
 #include "openmc/particle.h"
 #include "openmc/particle_data.h"
+#include "openmc/shared_array.h"
 
 #include <map>
 #include <vector>
@@ -38,7 +39,7 @@ struct MapType {
 };
 
 // Ensure cache alignment
-struct alignas(64) ONNXInput {
+struct ONNXInput {
   // Outgoing facet
   std::vector<int64_t> s_shape;
   std::vector<int64_t> s_values;
@@ -54,13 +55,10 @@ struct alignas(64) ONNXInput {
 //==============================================================================
 
 extern std::vector<std::vector<NeuralBCData>> surrogate_boundary_crossings;
-// Want to pre-allocate the vectors used to prepare tensor data
-extern std::vector<ONNXInput> onnx_input_data;
-extern std::vector<std::vector<Ort::Value>> onnx_input_tensors;
 
 extern OrtEnv* onnx_environment;
 extern Ort::Env* env;
-extern std::vector<Ort::Session> onnx_model;
+extern Ort::Session onnx_model;
 extern Ort::MemoryInfo onnx_memory_info;
 extern Ort::RunOptions onnx_runoptions;
 extern const char* onnx_inames[];
@@ -84,6 +82,8 @@ void finalize_train_surrogate_BC();
 
 void initialize_infer_surrogate_BC();
 
+void infer_crossing_surrogate_BC(
+  std::vector<SurrogateSite>& bank, SharedArray<SourceSite>& shared_bank);
 void infer_crossing_surrogate_BC(Particle& p, const Surface& surf);
 
 void finalize_infer_surrogate_BC();

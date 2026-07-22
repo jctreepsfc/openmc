@@ -50,6 +50,7 @@ vector<int64_t> progeny_per_particle;
 // is created. This repeats until no secondaries remain.
 SharedArray<SourceSite> shared_secondary_bank_read;
 SharedArray<SourceSite> shared_secondary_bank_write;
+SharedArray<SourceSite> shared_surrogate_bank;
 
 } // namespace simulation
 
@@ -70,6 +71,7 @@ void free_memory_bank()
   simulation::ifp_fission_lifetime_bank.clear();
   simulation::shared_secondary_bank_read.clear();
   simulation::shared_secondary_bank_write.clear();
+  simulation::shared_surrogate_bank.clear();
 }
 
 void init_fission_bank(int64_t max)
