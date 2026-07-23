@@ -144,84 +144,103 @@ void write_surrogate_BC_data(Particle& p, const Surface& surf)
 void infer_crossing_surrogate_BC(
   std::vector<SurrogateSite>& bank, SharedArray<SourceSite>& shared_bank)
 {
+  int n_particles = bank.size();
   // Prepare the input data
-  ONNXInput input_data;
-  int batches = bank.size();
-  if (batches < 1) {
+  if (n_particles < 1) {
     return;
   }
-  input_data.s_shape = {batches};
-  input_data.s_size = batches;
-  input_data.c_shape = {batches, 7};
-  input_data.c_size = batches * 7;
-  input_data.s_values.reserve(batches);
-  input_data.c_values.reserve(batches * 7);
-  for (const SurrogateSite& site : bank) {
-    input_data.s_values.push_back(onnx_map.at(site.facet));
-    input_data.c_values.push_back(site.r.x);
-    input_data.c_values.push_back(site.r.y);
-    input_data.c_values.push_back(site.r.z);
-    input_data.c_values.push_back(site.u.x);
-    input_data.c_values.push_back(site.u.y);
-    input_data.c_values.push_back(site.u.z);
-    input_data.c_values.push_back(log(site.E));
+
+  int max_bank_size = 1 << 16;
+  int n_batches = n_particles / max_bank_size;
+  std::vector<int> batches;
+  for (int i = 0; i < n_batches; ++i) {
+    batches.push_back(n_particles / n_batches);
   }
+  batches.back() += n_particles % n_batches;
 
-  // Create the tensors
-  std::vector<Ort::Value> input_tensors;
-  input_tensors.push_back(Ort::Value::CreateTensor<int64_t>(onnx_memory_info,
-    input_data.s_values.data(), input_data.s_size, input_data.s_shape.data(),
-    input_data.s_shape.size()));
-  input_tensors.push_back(Ort::Value::CreateTensor<float>(onnx_memory_info,
-    input_data.c_values.data(), input_data.c_size, input_data.c_shape.data(),
-    input_data.c_shape.size()));
+  int working_offset = 0;
+  for (int i = 0; i < n_batches; ++i) {
+    int batch = batches[i];
+    if (batch == 0)
+      continue;
 
-  auto out = onnx_model.Run(
-    onnx_runoptions, onnx_inames, input_tensors.data(), 2, onnx_onames, 4);
+    ONNXInput input_data;
+    input_data.s_shape = {batch};
+    input_data.s_size = batch;
+    input_data.c_shape = {batch, 7};
+    input_data.c_size = batch * 7;
+    input_data.s_values.reserve(batch);
+    input_data.c_values.reserve(batch * 7);
+    for (int j = working_offset; j < working_offset + batch; ++j) {
+      auto& site = bank[j];
+      input_data.s_values.push_back(onnx_map.at(site.facet));
+      input_data.c_values.push_back(site.r.x);
+      input_data.c_values.push_back(site.r.y);
+      input_data.c_values.push_back(site.r.z);
+      input_data.c_values.push_back(site.u.x);
+      input_data.c_values.push_back(site.u.y);
+      input_data.c_values.push_back(site.u.z);
+      input_data.c_values.push_back(log(site.E));
+    }
 
-  // Create the bank
-  std::vector<SourceSite> newbank;
-  for (int i = 0; i < batches; ++i) {
-    SourceSite tmp;
-    float wgt_mult = out[0].GetTensorMutableData<float>()[i];
-    if (wgt_mult < 1e-5)
-      wgt_mult = 0.;
-    tmp.wgt = bank[i].wgt * wgt_mult;
-    int64_t facet_i = out[1].GetTensorMutableData<int64_t>()[i];
-    unsigned long facet = onnx_map_inv.at(facet_i);
+    // Create the tensors
+    std::vector<Ort::Value> input_tensors;
+    input_tensors.push_back(Ort::Value::CreateTensor<int64_t>(onnx_memory_info,
+      input_data.s_values.data(), input_data.s_size, input_data.s_shape.data(),
+      input_data.s_shape.size()));
+    input_tensors.push_back(Ort::Value::CreateTensor<float>(onnx_memory_info,
+      input_data.c_values.data(), input_data.c_size, input_data.c_shape.data(),
+      input_data.c_shape.size()));
 
-    auto& surf = model::surfaces[bank[i].surf_id];
-    auto dag_ptr = dynamic_cast<const DAGSurface&>(*surf).dagmc_ptr();
-    std::vector<moab::EntityHandle> vertex_handles;
-    dag_ptr->moab_instance()->get_adjacencies(
-      &facet, 1, 0, false, vertex_handles);
-    std::vector<double> coords(9);
-    dag_ptr->moab_instance()->get_coords(
-      &vertex_handles[0], vertex_handles.size(), coords.data());
-    tmp.r.x = (coords[0] + coords[3] + coords[6]) / 3.0;
-    tmp.r.y = (coords[1] + coords[4] + coords[7]) / 3.0;
-    tmp.r.z = (coords[2] + coords[5] + coords[8]) / 3.0;
+    auto out = onnx_model.Run(
+      onnx_runoptions, onnx_inames, input_tensors.data(), 2, onnx_onames, 4);
 
-    float* angle_i = out[2].GetTensorMutableData<float>();
-    tmp.u.x = angle_i[i * 3];
-    tmp.u.y = angle_i[i * 3 + 1];
-    tmp.u.z = angle_i[i * 3 + 2];
+    // Create the bank
+    for (int j = 0; j < batch; ++j) {
+      int bank_idx = working_offset + j;
 
-    tmp.E = exp(out[3].GetTensorMutableData<float>()[i]);
-    if (tmp.E == 0)
-      tmp.wgt = 0.;
-    // Advance off the surrogate surface by a little bit
-    tmp.r += TINY_BIT * tmp.u;
-    tmp.surf_id = SURFACE_NONE;
-    // Add other info we need
-    tmp.parent_id = bank[i].parent_id;
-    tmp.progeny_id = bank[i].progeny_id;
-    tmp.particle = bank[i].particle;
-    tmp.wgt_born = bank[i].wgt_born;
-    tmp.wgt_ww_born = bank[i].wgt_ww_born;
-    tmp.n_split = bank[i].n_split;
-    // Add this source site to the shared surrogate bank
-    shared_bank.thread_unsafe_append(tmp);
+      SourceSite tmp;
+      float wgt_mult = out[0].GetTensorMutableData<float>()[j];
+      if (wgt_mult < 1e-5)
+        wgt_mult = 0.;
+      tmp.wgt = bank[j].wgt * wgt_mult;
+      int64_t facet_i = out[1].GetTensorMutableData<int64_t>()[j];
+      unsigned long facet = onnx_map_inv.at(facet_i);
+
+      auto& surf = model::surfaces[bank[j].surf_id];
+      auto dag_ptr = dynamic_cast<const DAGSurface&>(*surf).dagmc_ptr();
+      std::vector<moab::EntityHandle> vertex_handles;
+      dag_ptr->moab_instance()->get_adjacencies(
+        &facet, 1, 0, false, vertex_handles);
+      std::vector<double> coords(9);
+      dag_ptr->moab_instance()->get_coords(
+        &vertex_handles[0], vertex_handles.size(), coords.data());
+      tmp.r.x = (coords[0] + coords[3] + coords[6]) / 3.0;
+      tmp.r.y = (coords[1] + coords[4] + coords[7]) / 3.0;
+      tmp.r.z = (coords[2] + coords[5] + coords[8]) / 3.0;
+
+      float* angle_i = out[2].GetTensorMutableData<float>();
+      tmp.u.x = angle_i[j * 3];
+      tmp.u.y = angle_i[j * 3 + 1];
+      tmp.u.z = angle_i[j * 3 + 2];
+
+      tmp.E = exp(out[3].GetTensorMutableData<float>()[j]);
+      if (tmp.E == 0)
+        tmp.wgt = 0.;
+      // Advance off the surrogate surface by a little bit
+      tmp.r += TINY_BIT * tmp.u;
+      tmp.surf_id = SURFACE_NONE;
+      // Add other info we need
+      tmp.parent_id = bank[bank_idx].parent_id;
+      tmp.progeny_id = bank[bank_idx].progeny_id;
+      tmp.particle = bank[bank_idx].particle;
+      tmp.wgt_born = bank[bank_idx].wgt_born;
+      tmp.wgt_ww_born = bank[bank_idx].wgt_ww_born;
+      tmp.n_split = bank[bank_idx].n_split;
+      // Add this source site to the shared surrogate bank
+      shared_bank.thread_unsafe_append(tmp);
+    }
+    working_offset += batch;
   }
 }
 
@@ -251,34 +270,51 @@ void finalize_train_surrogate_BC()
 
 void initialize_infer_surrogate_BC()
 {
+  // Find what we are running on
+  auto providers = Ort::GetAvailableProviders();
+  bool has_gpu = false;
+  bool has_rt = false;
+  for (const auto& provider : providers) {
+    if (provider == "CUDAExecutionProvider")
+      has_gpu = true;
+    if (provider == "TensorrtExecutionProvider")
+      has_rt = true;
+  }
+
   OrtThreadingOptions* tp_options = nullptr;
   auto ret = Ort::GetApi().CreateThreadingOptions(&tp_options);
-  // Set threads to 1 for intra-op to get 1 core per OpenMP thread
   ret = Ort::GetApi().SetGlobalIntraOpNumThreads(tp_options, 1);
   ret = Ort::GetApi().SetGlobalInterOpNumThreads(tp_options, 1);
-  // Disable spinning to stop idle threads from hogging 100% CPU
   ret = Ort::GetApi().SetGlobalSpinControl(tp_options, 0);
-  // Initialize the environment
   ret = Ort::GetApi().CreateEnvWithGlobalThreadPools(
     ORT_LOGGING_LEVEL_WARNING, "Model", tp_options, &onnx_environment);
   env = new Ort::Env(onnx_environment);
-  // Clean up the helper (Env takes a copy)
   Ort::GetApi().ReleaseThreadingOptions(tp_options);
-
-  OrtCUDAProviderOptionsV2* cuda_options = nullptr;
-  ret = Ort::GetApi().CreateCUDAProviderOptions(&cuda_options);
-  std::vector<const char*> keys {"device_id", "do_copy_in_default_stream"};
-  std::vector<const char*> values {"0", "1"};
-  ret = Ort::GetApi().UpdateCUDAProviderOptions(
-    cuda_options, keys.data(), values.data(), (int)keys.size());
 
   Ort::SessionOptions session_options;
   session_options.SetIntraOpNumThreads(1);
   session_options.DisablePerSessionThreads();
   session_options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
-  ret = Ort::GetApi().SessionOptionsAppendExecutionProvider_CUDA_V2(
-    session_options, cuda_options);
-  Ort::GetApi().ReleaseCUDAProviderOptions(cuda_options);
+
+  if (has_gpu) {
+    OrtCUDAProviderOptionsV2* cuda_options = nullptr;
+    ret = Ort::GetApi().CreateCUDAProviderOptions(&cuda_options);
+    std::vector<const char*> keys {"device_id", "do_copy_in_default_stream"};
+    std::vector<const char*> values {"0", "1"};
+    ret = Ort::GetApi().UpdateCUDAProviderOptions(
+      cuda_options, keys.data(), values.data(), (int)keys.size());
+    ret = Ort::GetApi().SessionOptionsAppendExecutionProvider_CUDA_V2(
+      session_options, cuda_options);
+    Ort::GetApi().ReleaseCUDAProviderOptions(cuda_options);
+
+    if (has_rt) {
+      OrtTensorRTProviderOptionsV2* tensor_options = nullptr;
+      ret = Ort::GetApi().CreateTensorRTProviderOptions(&tensor_options);
+      ret = Ort::GetApi().SessionOptionsAppendExecutionProvider_TensorRT_V2(
+        session_options, tensor_options);
+      Ort::GetApi().ReleaseTensorRTProviderOptions(tensor_options);
+    }
+  }
 
   std::string filename = fmt::format("{}model.onnx", settings::path_output);
   onnx_model = Ort::Session(*env, filename.c_str(), session_options);
@@ -304,10 +340,14 @@ void initialize_infer_surrogate_BC()
   H5Tclose(maptype);
   file_close(mapfile);
 
+  int max = 0;
   for (MapType& entry : map_data) {
+    if (entry.nnid > max)
+      max = entry.nnid;
     onnx_map[entry.entity] = entry.nnid;
     onnx_map_inv[entry.nnid] = entry.entity;
   }
+  write_message(3, "Max nnid: {}", max);
 }
 
 void finalize_infer_surrogate_BC()
