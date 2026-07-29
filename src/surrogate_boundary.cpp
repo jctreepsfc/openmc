@@ -150,8 +150,9 @@ void infer_crossing_surrogate_BC(
     return;
   }
 
-  int max_bank_size = 1 << 16;
-  int n_batches = n_particles / max_bank_size;
+  // int max_batch_size = 1 << 14;
+  // int n_batches = n_particles / max_batch_size;
+  int n_batches = 10;
   std::vector<int> batches;
   for (int i = 0; i < n_batches; ++i) {
     batches.push_back(n_particles / n_batches);
