@@ -177,6 +177,22 @@ private:
   double b_; //!< Upper bound of distribution
 };
 
+class LogUniform : public Distribution {
+public:
+  explicit LogUniform(pugi::xml_node node);
+  LogUniform(double a, double b) : a_ {a}, b_ {b} {};
+  double evaluate(double x) const override;
+  double a() const { return a_; }
+  double b() const { return b_; }
+
+protected:
+  double sample_unbiased(uint64_t* seed) const override;
+
+private:
+  double a_;
+  double b_;
+};
+
 //==============================================================================
 //! PowerLaw distribution over the interval [a,b] with exponent n : p(x)=c x^n
 //==============================================================================

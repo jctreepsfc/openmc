@@ -96,6 +96,8 @@ class Univariate(EqualityMixin, ABC):
             return Discrete.from_xml_element(elem)
         elif distribution == 'uniform':
             return Uniform.from_xml_element(elem)
+        elif distribution == 'loguniform':
+            return LogUniform.from_xml_element(elem)
         elif distribution == 'powerlaw':
             return PowerLaw.from_xml_element(elem)
         elif distribution == 'maxwell':
@@ -685,6 +687,131 @@ class Uniform(Univariate):
         params = get_elem_list(elem, "parameters", float)
         bias_dist = cls._read_bias_from_xml(elem)
         return cls(*params, bias=bias_dist)
+
+class LogUniform(Univariate):
+    """Distribution with constant probability over a finite interval [a,b]
+
+    Parameters
+    ----------
+    a : float, optional
+        Lower bound of the sampling interval. Defaults to zero.
+    b : float, optional
+        Upper bound of the sampling interval. Defaults to unity.
+    bias : openmc.stats.Univariate, optional
+        Distribution for biased sampling.
+
+    Attributes
+    ----------
+    a : float
+        Lower bound of the sampling interval
+    b : float
+        Upper bound of the sampling interval
+    support : tuple of float
+        A 2-tuple (lower, upper) defining the interval over which the
+        distribution is nonzero-valued
+    bias : openmc.stats.Univariate or None
+        Distribution for biased sampling
+
+    """
+
+    def __init__(self, a: float = 0.0, b: float = 1.0,
+                 bias: Univariate | None = None):
+        self.a = a
+        self.b = b
+        super().__init__(bias)
+
+    def __len__(self):
+        return 2
+
+    @property
+    def a(self):
+        return self._a
+
+    @a.setter
+    def a(self, a):
+        cv.check_type('LogUniform a', a, Real)
+        self._a = a
+
+    @property
+    def b(self):
+        return self._b
+
+    @b.setter
+    def b(self, b):
+        cv.check_type('LogUniform b', b, Real)
+        self._b = b
+
+    @property
+    def support(self):
+        return (self._a, self._b)
+
+    def to_tabular(self):
+        if self.bias is not None:
+            raise RuntimeError("to_tabular() is not permitted for biased distributions.")
+        prob = 1./(self.b - self.a)
+        t = Tabular([self.a, self.b], [prob, prob], 'histogram')
+        t.c = [0., 1.]
+        return t
+
+    def _sample_unbiased(self, n_samples=1, seed=None):
+        rng = np.random.RandomState(seed)
+        return rng.uniform(self.a, self.b, n_samples)
+
+    def evaluate(self, x):
+        return np.where((self.a <= x) & (x <= self.b), 1/(self.b - self.a), 0.0)
+
+    def mean(self) -> float:
+        """Return mean of the uniform distribution
+
+        .. versionadded:: 0.15.3
+
+        Returns
+        -------
+        float
+            Mean of uniform distribution
+        """
+        return 0.5 * (self.a + self.b)
+
+    def to_xml_element(self, element_name: str):
+        """Return XML representation of the uniform distribution
+
+        Parameters
+        ----------
+        element_name : str
+            XML element name
+
+        Returns
+        -------
+        element : lxml.etree._Element
+            XML element containing uniform distribution data
+
+        """
+        element = ET.Element(element_name)
+        element.set("type", "loguniform")
+        element.set("parameters", f'{self.a} {self.b}')
+        self._append_bias_to_xml(element)
+        return element
+
+    @classmethod
+    def from_xml_element(cls, elem: ET.Element):
+        """Generate uniform distribution from an XML element
+
+        Parameters
+        ----------
+        elem : lxml.etree._Element
+            XML element
+
+        Returns
+        -------
+        openmc.stats.LogUniform
+            Uniform distribution generated from XML element
+
+        """
+        params = get_elem_list(elem, "parameters", float)
+        bias_dist = cls._read_bias_from_xml(elem)
+        return cls(*params, bias=bias_dist)
+
+
 
 
 class PowerLaw(Univariate):

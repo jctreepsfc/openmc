@@ -268,6 +268,37 @@ double Uniform::evaluate(double x) const
   }
 }
 
+LogUniform::LogUniform(pugi::xml_node node)
+{
+  auto params = get_node_array<double>(node, "parameters");
+  if (params.size() != 2) {
+    fatal_error("LogUniform distribution must have two "
+                "parameters specified.");
+  }
+
+  a_ = params.at(0);
+  b_ = params.at(1);
+
+  read_bias_from_xml(node);
+}
+
+double LogUniform::sample_unbiased(uint64_t* seed) const
+{
+  double xi = prn(seed);
+  return pow(b_, xi) * pow(a_, 1 - xi);
+}
+
+double LogUniform::evaluate(double x) const
+{
+  if (x <= a()) {
+    return 0.0;
+  } else if (x >= b()) {
+    return 0.0;
+  } else {
+    return 1 / (x * (log(b_) - log(a_)));
+  }
+}
+
 //==============================================================================
 // PowerLaw implementation
 //==============================================================================
@@ -655,6 +686,8 @@ UPtrDist distribution_from_xml(pugi::xml_node node)
   UPtrDist dist;
   if (type == "uniform") {
     dist = UPtrDist {new Uniform(node)};
+  } else if (type == "loguniform") {
+    dist = UPtrDist {new LogUniform(node)};
   } else if (type == "powerlaw") {
     dist = UPtrDist {new PowerLaw(node)};
   } else if (type == "maxwell") {
